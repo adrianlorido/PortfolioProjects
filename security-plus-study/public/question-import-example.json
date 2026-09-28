@@ -1,0 +1,30 @@
+{
+  "indexBase": 0,
+  "questions": [
+    {
+      "question": "A SOC analyst needs to correlate firewall, VPN and domain controller logs to detect a brute-force attack across systems. Which tool BEST supports this?",
+      "choices": ["SIEM", "Vulnerability scanner", "Protocol analyzer", "Hardware security module"],
+      "correctAnswers": [0],
+      "domain": "Security Operations",
+      "topics": ["SIEM", "Logging & Monitoring"],
+      "difficulty": "medium",
+      "explanation": "A SIEM aggregates logs from many sources and correlates related events into a single alert, which is exactly what cross-system detection requires.",
+      "incorrectAnswerExplanations": [null, "Scanners find vulnerabilities; they do not correlate logs.", "A protocol analyzer captures packets on one segment.", "An HSM stores and uses cryptographic keys."],
+      "examClue": "Correlate events from many log sources = SIEM.",
+      "memoryTip": "SIEM connects the dots.",
+      "scenario": true
+    },
+    {
+      "question": "Which TWO are characteristics of symmetric encryption?",
+      "choices": ["A single shared key encrypts and decrypts", "It is well suited to encrypting large amounts of data", "It provides non-repudiation", "It relies on a public/private key pair"],
+      "correctAnswers": ["A", "B"],
+      "domain": 1,
+      "topics": ["Encryption"],
+      "difficulty": "easy",
+      "explanation": "Symmetric algorithms such as AES use one shared key and are fast, which makes them ideal for bulk data.",
+      "incorrectAnswerExplanations": { "C": "Non-repudiation requires digital signatures (asymmetric).", "D": "Key pairs describe asymmetric encryption." },
+      "examClue": "Speed + one shared key = symmetric.",
+      "memoryTip": "Symmetric = same key."
+    }
+  ]
+}

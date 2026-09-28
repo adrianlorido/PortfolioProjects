@@ -111,6 +111,10 @@ begin
 
   assert (select count(*) from public.search_questions('PKI')) > 0, 'search by topic acronym';
   assert (select count(*) from public.search_questions('')) > 0, 'empty search lists questions';
+  assert (select count(*) from public.list_review_items()) = 1, 'review list shows answered questions';
+  assert (select count(*) from public.find_existing_stems(array[(select upper(stem) from public.questions order by id limit 1), 'no such question'])) = 1, 'duplicate stem detection';
+  assert (select count(*) from public.list_review_items(p_result => 'incorrect')) = 0, 'review list filters by result';
+  assert (select count(*) from public.list_review_items(p_bookmarked => true)) = 1, 'review list filters bookmarks';
 end $$;
 
 -- ---------------------------------------------------------------- Bob
@@ -128,6 +132,7 @@ begin
   assert (select count(*) from public.quiz_sessions) = 0, 'bob cannot see alice sessions';
   assert (select count(*) from public.exam_sessions) = 0, 'bob cannot see alice exams';
   assert (select count(*) from public.question_reports) = 0, 'bob cannot see alice reports';
+  assert (select count(*) from public.list_review_items()) = 0, 'bob review list is empty';
   assert (select count(*) from public.user_settings) = 1, 'bob sees only his settings';
   assert (select count(*) from public.profiles) = 1, 'bob sees only his profile';
 

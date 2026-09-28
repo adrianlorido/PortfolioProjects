@@ -835,6 +835,55 @@ as $$
   offset greatest(p_offset, 0);
 $$;
 
+-- Paginated review list: the learner's answered questions, newest first, with filters.
+create or replace function public.list_review_items(
+  p_result text default null,
+  p_confidence text default null,
+  p_bookmarked boolean default false,
+  p_domain smallint default null,
+  p_topic text default null,
+  p_difficulty text default null,
+  p_limit int default 20,
+  p_offset int default 0
+)
+returns table (question_id uuid, total_count bigint)
+language sql
+stable
+security invoker
+set search_path = ''
+as $$
+  select rs.question_id, count(*) over () as total_count
+  from public.review_schedule rs
+  join public.questions q on q.id = rs.question_id
+  where rs.user_id = (select auth.uid())
+    and (p_result is null or rs.last_result = (p_result = 'correct'))
+    and (p_confidence is null or rs.last_confidence = p_confidence)
+    and (not coalesce(p_bookmarked, false) or exists (
+      select 1 from public.bookmarks b where b.user_id = rs.user_id and b.question_id = rs.question_id))
+    and (p_domain is null or q.domain_id = p_domain)
+    and (p_difficulty is null or q.difficulty = p_difficulty)
+    and (p_topic is null or exists (
+      select 1 from public.question_topics qt where qt.question_id = q.id and qt.topic_id = p_topic))
+  order by rs.last_answered_at desc, rs.question_id
+  limit least(greatest(p_limit, 1), 100)
+  offset greatest(p_offset, 0);
+$$;
+
+-- Import helper: which of the given stems already exist (case/punctuation-insensitive)?
+create or replace function public.find_existing_stems(p_stems text[])
+returns setof text
+language sql
+stable
+security invoker
+set search_path = ''
+as $$
+  select distinct trim(regexp_replace(lower(q.stem), '[^a-z0-9]+', ' ', 'g'))
+  from public.questions q
+  where trim(regexp_replace(lower(q.stem), '[^a-z0-9]+', ' ', 'g')) in (
+    select trim(regexp_replace(lower(s), '[^a-z0-9]+', ' ', 'g')) from unnest(p_stems) s
+  );
+$$;
+
 -- Aggregate counts for dashboards (published questions only).
 create or replace function public.bank_stats()
 returns jsonb
@@ -881,6 +930,8 @@ revoke execute on function public.reset_my_progress() from public, anon;
 revoke execute on function public.upsert_questions(jsonb) from public, anon;
 revoke execute on function public.search_questions(text, smallint, text, text, text, int, int) from public, anon;
 revoke execute on function public.bank_stats() from public, anon;
+revoke execute on function public.find_existing_stems(text[]) from public, anon;
+revoke execute on function public.list_review_items(text, text, boolean, smallint, text, text, int, int) from public, anon;
 
 grant execute on function public.record_attempts(jsonb, numeric) to authenticated;
 grant execute on function public.update_attempt_confidence(uuid, text, jsonb) to authenticated;
@@ -889,4 +940,6 @@ grant execute on function public.reset_my_progress() to authenticated;
 grant execute on function public.upsert_questions(jsonb) to authenticated;
 grant execute on function public.search_questions(text, smallint, text, text, text, int, int) to authenticated;
 grant execute on function public.bank_stats() to authenticated;
+grant execute on function public.find_existing_stems(text[]) to authenticated;
+grant execute on function public.list_review_items(text, text, boolean, smallint, text, text, int, int) to authenticated;
 grant execute on function public.is_admin() to authenticated;
