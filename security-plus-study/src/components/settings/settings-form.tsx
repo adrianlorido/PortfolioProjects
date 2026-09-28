@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { saveSettingsAction } from "@/lib/actions/settings";
+import { callAction } from "@/lib/call-action";
 import { DAILY_GOALS, QUIZ_SIZES } from "@/lib/config/study";
 import type { ThemePreference, UserSettings } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -47,7 +48,7 @@ export function SettingsForm({ initial }: { initial: UserSettings }) {
 
   const save = () =>
     startTransition(async () => {
-      const result = await saveSettingsAction(settings);
+      const result = await callAction(saveSettingsAction(settings));
       if (!result.ok) {
         toast.error(result.error);
         return;

@@ -15,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { saveQuestionAction } from "@/lib/actions/admin";
+import { callAction } from "@/lib/call-action";
 import { DOMAINS } from "@/lib/config/domains";
 import { choiceLetter, selectPrompt } from "@/lib/questions/transform";
 import type { QuestionFormInput } from "@/lib/questions/form";
@@ -107,7 +108,7 @@ export function QuestionEditor({
       status,
     };
     startTransition(async () => {
-      const result = await saveQuestionAction(form);
+      const result = await callAction(saveQuestionAction(form));
       if (!result.ok) {
         const map: Record<string, string> = {};
         for (const issue of result.issues ?? []) map[issue.path === "question" ? "stem" : issue.path] ??= issue.message;

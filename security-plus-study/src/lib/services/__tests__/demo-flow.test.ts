@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { AppUser } from "@/lib/types";
 
@@ -139,5 +139,47 @@ describe("exam flow", () => {
     );
     const review = await ctx.review.getSessionReview(learner, ctx.repo, { examId: exam.id }, { result: "incorrect" });
     expect(review!.items).toHaveLength(19);
+  });
+
+  it("accepts the answer sheet sent with submit, dropping invalid selections", async () => {
+    const exam = await ctx.exam.startExam(learner, ctx.repo, "sprint");
+    const [q1, q2, q3] = await ctx.repo.getQuestions(exam.questionIds.slice(0, 3));
+    const correct = (q: typeof q1) => q.choices.filter((c) => c.isCorrect).map((c) => c.id);
+    // q1 was autosaved wrong, then changed in the browser (the autosave failed).
+    await ctx.exam.saveExamResponse(learner, ctx.repo, exam.id, q1.id, {
+      selectedChoiceIds: [q1.choices.find((c) => !c.isCorrect)!.id],
+      flagged: false,
+    });
+    const submitted = await ctx.exam.submitExam(learner, ctx.repo, exam.id, {
+      [q1.id]: { selectedChoiceIds: correct(q1), flagged: true },
+      [q2.id]: { selectedChoiceIds: correct(q2), flagged: false },
+      [q3.id]: { selectedChoiceIds: ["00000000-0000-4000-8000-000000000000"], flagged: false },
+      "11111111-1111-4111-8111-111111111111": { selectedChoiceIds: [], flagged: true },
+    });
+    expect(submitted.result).toMatchObject({ correct: 2, incorrect: 0, unanswered: 18 });
+    expect(submitted.responses[q1.id]).toMatchObject({ flagged: true });
+    expect(submitted.responses["11111111-1111-4111-8111-111111111111"]).toBeUndefined();
+  });
+
+  it("ignores a late answer sheet once time (plus grace) has run out", async () => {
+    const exam = await ctx.exam.startExam(learner, ctx.repo, "sprint");
+    const [q1, q2] = await ctx.repo.getQuestions(exam.questionIds.slice(0, 2));
+    await ctx.exam.saveExamResponse(learner, ctx.repo, exam.id, q1.id, {
+      selectedChoiceIds: q1.choices.filter((c) => c.isCorrect).map((c) => c.id),
+      flagged: false,
+    });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date(exam.expiresAt).getTime() + 60_000);
+      await expect(
+        ctx.exam.saveExamResponse(learner, ctx.repo, exam.id, q2.id, { selectedChoiceIds: [q2.choices[0].id], flagged: false }),
+      ).rejects.toThrow(/Time is up/);
+      const submitted = await ctx.exam.submitExam(learner, ctx.repo, exam.id, {
+        [q2.id]: { selectedChoiceIds: q2.choices.filter((c) => c.isCorrect).map((c) => c.id), flagged: false },
+      });
+      expect(submitted.result).toMatchObject({ correct: 1, unanswered: 19 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

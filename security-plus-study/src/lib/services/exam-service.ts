@@ -55,6 +55,22 @@ export async function loadExam(user: AppUser, repo: Repository, examId: string):
   };
 }
 
+function isValidResponse(question: Question, response: ExamResponse): boolean {
+  if (response.selectedChoiceIds.length === 0) return true;
+  return (
+    validateSelection(
+      question.choices.map((c) => c.id),
+      question.correctCount,
+      response.selectedChoiceIds,
+      { requireExactCount: false },
+    ) === null
+  );
+}
+
+function normalizeResponse(response: ExamResponse): ExamResponse {
+  return { selectedChoiceIds: [...new Set(response.selectedChoiceIds)], flagged: Boolean(response.flagged) };
+}
+
 export async function saveExamResponse(
   user: AppUser,
   repo: Repository,
@@ -71,21 +87,23 @@ export async function saveExamResponse(
   if (response.selectedChoiceIds.length > 0) {
     const question = await repo.getQuestion(questionId);
     if (!question) throw new UserFacingError("This question is no longer available.");
-    const problem = validateSelection(
-      question.choices.map((c) => c.id),
-      question.correctCount,
-      response.selectedChoiceIds,
-      { requireExactCount: false },
-    );
-    if (problem) throw new UserFacingError("Invalid answer selection.");
+    if (!isValidResponse(question, response)) throw new UserFacingError("Invalid answer selection.");
   }
-  await repo.saveExamResponse(user.id, examId, questionId, {
-    selectedChoiceIds: [...new Set(response.selectedChoiceIds)],
-    flagged: Boolean(response.flagged),
-  });
+  await repo.saveExamResponse(user.id, examId, questionId, normalizeResponse(response));
 }
 
-export async function submitExam(user: AppUser, repo: Repository, examId: string): Promise<ExamSession> {
+/**
+ * Grade and close an exam. The browser sends its full answer sheet with the
+ * submit so a failed autosave can never cost an answer; those answers are
+ * validated and only accepted before the deadline (plus grace). After that,
+ * only responses saved in time count.
+ */
+export async function submitExam(
+  user: AppUser,
+  repo: Repository,
+  examId: string,
+  finalResponses?: Record<string, ExamResponse>,
+): Promise<ExamSession> {
   const exam = await repo.getExamSession(user.id, examId);
   if (!exam) throw new UserFacingError("Exam not found.");
   if (exam.status !== "in_progress") return exam;
@@ -100,14 +118,28 @@ export async function submitExam(user: AppUser, repo: Repository, examId: string
   const ordered = exam.questionIds.map((id) => byId.get(id)).filter((q): q is Question => !!q);
   const stateById = new Map<string, ReviewState>(states.map((s) => [s.questionId, s]));
 
+  const responses: Record<string, ExamResponse> = { ...exam.responses };
+  if (finalResponses && !isPastDeadline(exam, now)) {
+    for (const [questionId, response] of Object.entries(finalResponses)) {
+      const question = byId.get(questionId);
+      if (!question || !isValidResponse(question, response)) continue;
+      const next = normalizeResponse(response);
+      const saved = exam.responses[questionId];
+      const changed =
+        !saved || saved.flagged !== next.flagged || saved.selectedChoiceIds.join() !== next.selectedChoiceIds.join();
+      if (changed) await repo.saveExamResponse(user.id, exam.id, questionId, next);
+      responses[questionId] = next;
+    }
+  }
+
   const end = Math.min(now.getTime(), new Date(exam.expiresAt).getTime());
   const timeUsedSeconds = (end - new Date(exam.startedAt).getTime()) / 1000;
-  const result = scoreExam(ordered, exam.responses, timeUsedSeconds);
+  const result = scoreExam(ordered, responses, timeUsedSeconds);
   const perQuestionMs = ordered.length ? Math.round((timeUsedSeconds * 1000) / ordered.length) : 0;
 
   const writes: AttemptWrite[] = [];
   for (const q of ordered) {
-    const selected = exam.responses[q.id]?.selectedChoiceIds ?? [];
+    const selected = responses[q.id]?.selectedChoiceIds ?? [];
     if (selected.length === 0) continue; // unanswered questions do not affect mastery
     const isCorrect = gradeAnswer(correctChoiceIds(q), selected).isCorrect;
     const previous = stateById.get(q.id) ?? null;

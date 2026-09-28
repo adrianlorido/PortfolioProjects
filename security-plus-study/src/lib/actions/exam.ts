@@ -46,10 +46,21 @@ export async function saveExamResponseAction(input: {
   });
 }
 
-export async function submitExamAction(examId: string): Promise<ActionResult<{ href: string }>> {
+const responseSchema = z.object({ selectedChoiceIds: z.array(uuid).max(8), flagged: z.boolean() });
+
+export async function submitExamAction(
+  examId: string,
+  responses?: Record<string, { selectedChoiceIds: string[]; flagged: boolean }>,
+): Promise<ActionResult<{ href: string }>> {
   return runAction(async () => {
     const user = await assertUser();
-    const exam = await submitExam(user, await getRepository(), uuid.parse(examId));
+    const finalResponses = responses
+      ? z
+          .record(uuid, responseSchema)
+          .refine((r) => Object.keys(r).length <= 200, "Too many responses.")
+          .parse(responses)
+      : undefined;
+    const exam = await submitExam(user, await getRepository(), uuid.parse(examId), finalResponses);
     return { href: `/exam/${exam.id}/results` };
   });
 }

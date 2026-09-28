@@ -21,12 +21,15 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useHotkeys } from "@/hooks/use-hotkeys";
 import { saveExamResponseAction, submitExamAction } from "@/lib/actions/exam";
+import { callAction, NETWORK_ERROR } from "@/lib/call-action";
 import { formatClock } from "@/lib/format";
 import type { ExamResponse, QuizQuestion } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 type NavFilter = "all" | "unanswered" | "flagged";
+
+const MAX_SAVE_RETRIES = 3;
 
 export interface ExamRunnerProps {
   examId: string;
@@ -57,6 +60,7 @@ export function ExamRunner({ examId, title, questions, initialResponses, expires
   const inflight = useRef(new Set<Promise<unknown>>());
   const offset = useRef(0);
   const submittedRef = useRef(false);
+  const autoRetryAt = useRef(0);
   const warned = useRef(new Set<number>());
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -76,26 +80,53 @@ export function ExamRunner({ examId, title, questions, initialResponses, expires
     responsesRef.current = responses;
   }, [responses]);
 
+  // Autosave is crash recovery; the full answer sheet is also sent on submit.
+  // Failed saves retry a few times unless a newer edit already queued one.
+  const saveRef = useRef<(questionId: string) => void>(() => {});
+  const retries = useRef(new Map<string, number>());
+  const retryLater = useCallback((questionId: string) => {
+    const attempts = retries.current.get(questionId) ?? 0;
+    if (submittedRef.current || timers.current.has(questionId) || attempts >= MAX_SAVE_RETRIES) return;
+    retries.current.set(questionId, attempts + 1);
+    timers.current.set(
+      questionId,
+      window.setTimeout(() => {
+        timers.current.delete(questionId);
+        if (!submittedRef.current) saveRef.current(questionId);
+      }, 5000),
+    );
+  }, []);
+
   const save = useCallback(
     (questionId: string) => {
       const current = responsesRef.current[questionId] ?? { selectedChoiceIds: [], flagged: false };
       setSaveState("saving");
-      const p = saveExamResponseAction({ examId, questionId, selectedChoiceIds: current.selectedChoiceIds, flagged: current.flagged })
+      const p = callAction(saveExamResponseAction({ examId, questionId, selectedChoiceIds: current.selectedChoiceIds, flagged: current.flagged }))
         .then((result) => {
           setSaveState(result.ok ? "saved" : "error");
-          if (!result.ok) toast.error(result.error, { id: "exam-save" });
+          if (result.ok) {
+            retries.current.delete(questionId);
+            return;
+          }
+          const message = result.error === NETWORK_ERROR ? "Answer not saved yet. Your answers are also sent when you submit." : result.error;
+          toast.error(message, { id: "exam-save" });
+          retryLater(questionId);
         })
-        .catch(() => setSaveState("error"))
         .finally(() => inflight.current.delete(p));
       inflight.current.add(p);
     },
-    [examId],
+    [examId, retryLater],
   );
+
+  useEffect(() => {
+    saveRef.current = save;
+  }, [save]);
 
   const queueSave = useCallback(
     (questionId: string) => {
       const existing = timers.current.get(questionId);
       if (existing) window.clearTimeout(existing);
+      retries.current.delete(questionId);
       timers.current.set(
         questionId,
         window.setTimeout(() => {
@@ -107,14 +138,11 @@ export function ExamRunner({ examId, title, questions, initialResponses, expires
     [save],
   );
 
-  const flush = useCallback(async () => {
-    for (const [questionId, timer] of timers.current) {
-      window.clearTimeout(timer);
-      timers.current.delete(questionId);
-      save(questionId);
-    }
+  const cancelPendingSaves = useCallback(async () => {
+    for (const timer of timers.current.values()) window.clearTimeout(timer);
+    timers.current.clear();
     await Promise.allSettled([...inflight.current]);
-  }, [save]);
+  }, []);
 
   const submit = useCallback(
     async (auto = false) => {
@@ -122,18 +150,20 @@ export function ExamRunner({ examId, title, questions, initialResponses, expires
       submittedRef.current = true;
       setSubmitting(true);
       setConfirmOpen(false);
-      await flush();
-      const result = await submitExamAction(examId);
+      // The submit carries every answer, so queued autosaves are no longer needed.
+      await cancelPendingSaves();
+      const result = await callAction(submitExamAction(examId, responsesRef.current));
       if (!result.ok) {
         submittedRef.current = false;
         setSubmitting(false);
-        toast.error(result.error);
+        if (auto) autoRetryAt.current = Date.now() + 5000;
+        toast.error(result.error, { id: "exam-submit" });
         return;
       }
       if (auto) toast.info("Time's up — your exam was submitted.");
       router.replace(result.data.href);
     },
-    [examId, flush, router],
+    [examId, cancelPendingSaves, router],
   );
 
   // Countdown against the server clock.
@@ -149,7 +179,7 @@ export function ExamRunner({ examId, title, questions, initialResponses, expires
           toast.warning(`${mark / 60} minute${mark === 60 ? "" : "s"} remaining`, { id: "exam-time" });
         }
       }
-      if (secs <= 0) void submit(true);
+      if (secs <= 0 && Date.now() >= autoRetryAt.current) void submit(true);
     };
     tick();
     const id = window.setInterval(tick, 1000);

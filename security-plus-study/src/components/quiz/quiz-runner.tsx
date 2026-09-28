@@ -22,6 +22,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useHotkeys } from "@/hooks/use-hotkeys";
 import { setBookmarkAction } from "@/lib/actions/library";
 import { endQuizAction, rateConfidenceAction, submitAnswerAction } from "@/lib/actions/study";
+import { callAction } from "@/lib/call-action";
 import { formatClock } from "@/lib/format";
 import type { AnswerFeedback } from "@/lib/services/feedback";
 import type { Confidence, QuizQuestion } from "@/lib/types";
@@ -67,6 +68,7 @@ export function QuizRunner({ sessionId, title, questions, initialAnswered, initi
   const [pending, startTransition] = useTransition();
   const [finishing, startFinishing] = useTransition();
   const questionStart = useRef(0);
+  const submitting = useRef(false);
   const answeredToday = useRef(goal.answeredToday);
   const nextButton = useRef<HTMLButtonElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -124,15 +126,20 @@ export function QuizRunner({ sessionId, title, questions, initialAnswered, initi
   );
 
   const submit = () => {
-    if (!canSubmit) return;
+    // The ref blocks a second Enter press that lands before `pending` re-renders.
+    if (!canSubmit || submitting.current) return;
+    submitting.current = true;
     const timeSpentMs = now() - questionStart.current;
     startTransition(async () => {
-      const result = await submitAnswerAction({
-        sessionId,
-        questionId: question.id,
-        selectedChoiceIds: selected,
-        timeSpentMs,
-      });
+      const result = await callAction(
+        submitAnswerAction({
+          sessionId,
+          questionId: question.id,
+          selectedChoiceIds: selected,
+          timeSpentMs,
+        }),
+      );
+      submitting.current = false;
       if (!result.ok) {
         toast.error(result.error);
         return;
@@ -152,7 +159,8 @@ export function QuizRunner({ sessionId, title, questions, initialAnswered, initi
 
   const finish = () =>
     startFinishing(async () => {
-      await endQuizAction(sessionId);
+      // Answers are already saved; closing the session is best effort.
+      await endQuizAction(sessionId).catch(() => null);
       router.push(`/quiz/${sessionId}/summary`);
     });
 
@@ -174,7 +182,7 @@ export function QuizRunner({ sessionId, title, questions, initialAnswered, initi
       else copy.delete(question.id);
       return copy;
     });
-    void setBookmarkAction(question.id, next).then((result) => {
+    void callAction(setBookmarkAction(question.id, next)).then((result) => {
       if (!result.ok) {
         toast.error(result.error);
         setBookmarks((prev) => {
@@ -191,7 +199,7 @@ export function QuizRunner({ sessionId, title, questions, initialAnswered, initi
     if (!feedback || feedback.confidence === confidence) return;
     const previous = feedback;
     setAnswered((prev) => ({ ...prev, [question.id]: { ...feedback, confidence } }));
-    void rateConfidenceAction({ attemptId: feedback.attemptId, confidence }).then((result) => {
+    void callAction(rateConfidenceAction({ attemptId: feedback.attemptId, confidence })).then((result) => {
       if (!result.ok) {
         toast.error(result.error);
         setAnswered((prev) => ({ ...prev, [question.id]: previous }));

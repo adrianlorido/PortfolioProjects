@@ -7,6 +7,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { setBookmarkAction } from "@/lib/actions/library";
+import { callAction } from "@/lib/call-action";
 
 export function BookmarkButton({
   questionId,
@@ -28,7 +29,7 @@ export function BookmarkButton({
     startTransition(async () => {
       const next = !on;
       setOn(next);
-      const result = await setBookmarkAction(questionId, next);
+      const result = await callAction(setBookmarkAction(questionId, next));
       if (!result.ok) {
         setOn(!next);
         toast.error(result.error);

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { updateDisplayNameAction } from "@/lib/actions/settings";
+import { callAction } from "@/lib/call-action";
 
 export function ProfileForm({ displayName, email }: { displayName: string; email: string }) {
   const [name, setName] = useState(displayName);
@@ -19,7 +20,7 @@ export function ProfileForm({ displayName, email }: { displayName: string; email
       onSubmit={(e) => {
         e.preventDefault();
         startTransition(async () => {
-          const result = await updateDisplayNameAction(name);
+          const result = await callAction(updateDisplayNameAction(name));
           if (!result.ok) return void toast.error(result.error);
           setSaved(result.data.displayName);
           toast.success("Profile updated");

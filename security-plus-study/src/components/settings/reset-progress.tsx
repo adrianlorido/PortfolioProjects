@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { resetProgressAction } from "@/lib/actions/settings";
+import { callAction } from "@/lib/call-action";
 
 export function ResetProgress() {
   const [open, setOpen] = useState(false);
@@ -48,7 +49,7 @@ export function ResetProgress() {
             disabled={text !== "RESET" || pending}
             onClick={() =>
               startTransition(async () => {
-                const result = await resetProgressAction(text);
+                const result = await callAction(resetProgressAction(text));
                 if (!result.ok) return void toast.error(result.error);
                 toast.success("Progress reset. Fresh start!");
                 setOpen(false);

@@ -8,6 +8,7 @@ import { ExplanationDetails } from "@/components/quiz/answer-feedback";
 import { QuestionCard } from "@/components/quiz/question-card";
 import { Button } from "@/components/ui/button";
 import { revealAnswerAction } from "@/lib/actions/library";
+import { callAction } from "@/lib/call-action";
 import type { AnswerFeedback } from "@/lib/services/feedback";
 import type { QuizQuestion } from "@/lib/types";
 
@@ -26,7 +27,7 @@ export function QuestionExplorer({ question }: { question: QuizQuestion }) {
 
   const reveal = () =>
     startTransition(async () => {
-      const result = await revealAnswerAction(question.id);
+      const result = await callAction(revealAnswerAction(question.id));
       if (!result.ok) {
         toast.error(result.error);
         return;

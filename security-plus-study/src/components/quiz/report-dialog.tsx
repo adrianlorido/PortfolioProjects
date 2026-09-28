@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { reportQuestionAction } from "@/lib/actions/library";
+import { callAction } from "@/lib/call-action";
 
 const REASONS = [
   { value: "incorrect_answer", label: "The marked answer looks wrong" },
@@ -27,7 +28,7 @@ export function ReportDialog({ questionId, trigger }: { questionId: string; trig
 
   const submit = () =>
     startTransition(async () => {
-      const result = await reportQuestionAction({ questionId, reason, details });
+      const result = await callAction(reportQuestionAction({ questionId, reason, details }));
       if (!result.ok) {
         toast.error(result.error);
         return;

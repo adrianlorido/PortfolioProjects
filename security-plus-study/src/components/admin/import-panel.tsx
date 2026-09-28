@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { importQuestionsAction, validateImportAction, type ImportPreview } from "@/lib/actions/admin";
+import { callAction } from "@/lib/call-action";
 import type { DomainId } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -43,14 +44,14 @@ export function ImportPanel() {
 
   const validate = () =>
     startValidate(async () => {
-      const result = await validateImportAction(json);
+      const result = await callAction(validateImportAction(json));
       if (!result.ok) return void toast.error(result.error);
       setPreview(result.data);
     });
 
   const runImport = () =>
     startImport(async () => {
-      const result = await importQuestionsAction(json, { skipInvalid });
+      const result = await callAction(importQuestionsAction(json, { skipInvalid }));
       if (!result.ok) return void toast.error(result.error);
       setImported(result.data.imported);
       toast.success(`Imported ${result.data.imported} question${result.data.imported === 1 ? "" : "s"}`);

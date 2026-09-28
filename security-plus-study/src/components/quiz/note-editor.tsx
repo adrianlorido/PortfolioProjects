@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { saveNoteAction } from "@/lib/actions/library";
+import { callAction } from "@/lib/call-action";
 
 export function NoteEditor({
   questionId,
@@ -27,7 +28,7 @@ export function NoteEditor({
 
   const save = () =>
     startTransition(async () => {
-      const result = await saveNoteAction(questionId, value);
+      const result = await callAction(saveNoteAction(questionId, value));
       if (!result.ok) {
         toast.error(result.error);
         return;

@@ -7,6 +7,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { updateReportStatusAction } from "@/lib/actions/admin";
+import { callAction } from "@/lib/call-action";
 import type { ReportStatus } from "@/lib/types";
 
 export function ReportActions({ id, status }: { id: string; status: ReportStatus }) {
@@ -14,7 +15,7 @@ export function ReportActions({ id, status }: { id: string; status: ReportStatus
   const [pending, startTransition] = useTransition();
   const set = (next: ReportStatus) =>
     startTransition(async () => {
-      const result = await updateReportStatusAction(id, next);
+      const result = await callAction(updateReportStatusAction(id, next));
       if (!result.ok) return void toast.error(result.error);
       router.refresh();
     });

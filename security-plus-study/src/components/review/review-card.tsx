@@ -12,6 +12,7 @@ import { ExplanationDetails } from "@/components/quiz/answer-feedback";
 import { NoteEditor } from "@/components/quiz/note-editor";
 import { Button } from "@/components/ui/button";
 import { setBookmarkAction } from "@/lib/actions/library";
+import { callAction } from "@/lib/call-action";
 import { formatRelative } from "@/lib/format";
 import { choiceLetter } from "@/lib/questions/transform";
 import type { AnswerFeedback } from "@/lib/services/feedback";
@@ -39,7 +40,7 @@ export function ReviewCard({ item, defaultOpen = false }: { item: ReviewCardData
   const toggleBookmark = async () => {
     const next = !bookmarked;
     setBookmarked(next);
-    const result = await setBookmarkAction(question.id, next);
+    const result = await callAction(setBookmarkAction(question.id, next));
     if (!result.ok) {
       setBookmarked(!next);
       toast.error(result.error);

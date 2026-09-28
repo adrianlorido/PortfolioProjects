@@ -19,6 +19,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { deleteQuestionAction, duplicateQuestionAction } from "@/lib/actions/admin";
+import { callAction } from "@/lib/call-action";
 
 export function QuestionRowActions({ id, afterDelete }: { id: string; afterDelete?: string }) {
   const router = useRouter();
@@ -27,7 +28,7 @@ export function QuestionRowActions({ id, afterDelete }: { id: string; afterDelet
 
   const duplicate = () =>
     startTransition(async () => {
-      const result = await duplicateQuestionAction(id);
+      const result = await callAction(duplicateQuestionAction(id));
       if (!result.ok) return void toast.error(result.error);
       toast.success("Duplicated as a draft");
       router.push(`/admin/questions/${result.data.id}`);
@@ -35,7 +36,7 @@ export function QuestionRowActions({ id, afterDelete }: { id: string; afterDelet
 
   const remove = () =>
     startTransition(async () => {
-      const result = await deleteQuestionAction(id);
+      const result = await callAction(deleteQuestionAction(id));
       if (!result.ok) return void toast.error(result.error);
       toast.success("Question deleted");
       if (afterDelete) router.push(afterDelete);
