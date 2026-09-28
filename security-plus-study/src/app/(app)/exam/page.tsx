@@ -50,7 +50,7 @@ export default async function ExamSetupPage() {
         </Card>
       )}
 
-      <div className="grid gap-6 xl:grid-cols-[1.6fr_1fr]">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.6fr_1fr]">
         <Card>
           <CardHeader>
             <CardTitle>Choose your exam</CardTitle>

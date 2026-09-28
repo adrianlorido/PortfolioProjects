@@ -116,7 +116,7 @@ export default async function ExamResultsPage({ params }: PageProps<"/exam/[exam
         </Button>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1.4fr_1fr]">
         <Card>
           <CardHeader>
             <CardTitle>Domain breakdown</CardTitle>

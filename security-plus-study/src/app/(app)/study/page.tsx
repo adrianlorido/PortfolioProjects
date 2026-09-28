@@ -74,7 +74,7 @@ export default async function StudyPage() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         <ModeCard icon={Crosshair} title="Domain practice" description="Focus on one SY0-701 domain at a time.">
           <ul className="-mx-2">
             {data.domains.map((d) => {

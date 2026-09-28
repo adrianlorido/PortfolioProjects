@@ -35,14 +35,15 @@ const answerRef = z.union([z.number().int(), z.string()]);
 
 export const rawQuestionSchema = z.object({
   id: z.string().optional(),
-  question: z.string({ error: "Question text is required" }),
-  choices: z.array(choiceSchema, { error: "Choices must be an array" }),
+  // Presence of required fields is checked after parsing so every problem is reported at once.
+  question: z.string({ error: "Question text must be a string" }).optional(),
+  choices: z.array(choiceSchema, { error: "Choices must be an array" }).optional(),
   correctAnswers: z.union([z.array(answerRef), answerRef]).optional(),
   correctAnswer: z.union([z.array(answerRef), answerRef]).optional(),
-  domain: z.union([z.string(), z.number()], { error: "Domain is required" }),
+  domain: z.union([z.string(), z.number()], { error: "Domain must be a string or number" }).optional(),
   topics: z.array(z.string(), { error: "Topics must be an array of strings" }).default([]),
   difficulty: z.string().default("medium"),
-  explanation: z.string({ error: "Explanation is required" }),
+  explanation: z.string({ error: "Explanation must be a string" }).optional(),
   incorrectAnswerExplanations: z
     .union([z.array(z.string().nullable()), z.record(z.string(), z.string())])
     .optional(),
@@ -130,19 +131,24 @@ export function validateQuestion(
   }
   const q = parsed.data;
 
-  const stem = normalizeWhitespace(q.question);
-  if (!stem) err("question", "Question text is empty");
+  if (q.question === undefined) err("question", "Question text is required");
+  if (q.domain === undefined) err("domain", "Domain is required");
+  if (q.explanation === undefined) err("explanation", "Explanation is required");
+  if (q.choices === undefined) err("choices", "Choices are required");
+
+  const stem = normalizeWhitespace(q.question ?? "");
+  if (q.question !== undefined && !stem) err("question", "Question text is empty");
   else if (stem.length > LIMITS.stem) err("question", `Question text exceeds ${LIMITS.stem} characters`);
 
   if (q.id !== undefined && !UUID_RE.test(q.id)) err("id", "id must be a UUID when provided");
 
   // Choices
-  const choices = q.choices.map((c) =>
+  const choices = (q.choices ?? []).map((c) =>
     typeof c === "string"
       ? { text: normalizeWhitespace(c), explanation: null as string | null, correct: undefined as boolean | undefined }
       : { text: normalizeWhitespace(c.text), explanation: c.explanation ? normalizeWhitespace(c.explanation) : null, correct: c.correct },
   );
-  if (choices.length < LIMITS.minChoices) err("choices", `At least ${LIMITS.minChoices} choices are required`);
+  if (q.choices !== undefined && choices.length < LIMITS.minChoices) err("choices", `At least ${LIMITS.minChoices} choices are required`);
   if (choices.length > LIMITS.maxChoices) err("choices", `No more than ${LIMITS.maxChoices} choices are allowed`);
   const seenChoices = new Set<string>();
   choices.forEach((c, i) => {
@@ -167,7 +173,7 @@ export function validateQuestion(
   } else {
     correctIdx = choices.flatMap((c, i) => (c.correct ? [i] : []));
   }
-  if (correctIdx.length === 0) err("correctAnswers", "At least one correct answer is required");
+  if (correctIdx.length === 0 && choices.length > 0) err("correctAnswers", "At least one correct answer is required");
   if (choices.length > 0 && correctIdx.length >= choices.length) err("correctAnswers", "At least one choice must be incorrect");
 
   const questionType = correctIdx.length > 1 ? "multiple" : "single";
@@ -179,8 +185,8 @@ export function validateQuestion(
   }
 
   // Domain, topics, difficulty
-  const domainId = resolveDomain(q.domain);
-  if (!domainId) err("domain", `Unknown domain "${q.domain}". Use 1-5, a code like "4.0", or the domain name`);
+  const domainId = q.domain === undefined ? null : resolveDomain(q.domain);
+  if (q.domain !== undefined && !domainId) err("domain", `Unknown domain "${q.domain}". Use 1-5, a code like "4.0", or the domain name`);
 
   const topicLabels = q.topics.map((t) => t.trim()).filter(Boolean);
   if (topicLabels.length === 0) err("topics", "At least one topic is required");
@@ -191,8 +197,8 @@ export function validateQuestion(
   if (!DIFFICULTIES.includes(difficulty)) err("difficulty", `Difficulty must be one of ${DIFFICULTIES.join(", ")}`);
 
   // Explanations
-  const explanation = normalizeWhitespace(q.explanation);
-  if (!explanation) err("explanation", "Explanation is required");
+  const explanation = normalizeWhitespace(q.explanation ?? "");
+  if (q.explanation !== undefined && !explanation) err("explanation", "Explanation is required");
   else if (explanation.length > LIMITS.explanation) err("explanation", `Explanation exceeds ${LIMITS.explanation} characters`);
   else if (explanation.length < 25) warn("explanation", "Explanation is very short");
 

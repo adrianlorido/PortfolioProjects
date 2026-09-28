@@ -135,7 +135,7 @@ export function QuestionEditor({
   };
 
   return (
-    <div className="grid gap-6 xl:grid-cols-[1fr_20rem]">
+    <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_20rem]">
       <div className="min-w-0 space-y-6">
         <Card>
           <CardHeader>
@@ -255,7 +255,7 @@ export function QuestionEditor({
               />
               <FieldError id={`${uid}-explanation-err`} message={errorFor("explanation")} />
             </div>
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor={`${uid}-clue`}>Exam clue</Label>
                 <Textarea

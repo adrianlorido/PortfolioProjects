@@ -13,3 +13,5 @@ trap cleanup EXIT
 for f in supabase/migrations/*.sql; do "${PSQL[@]}" -d "${DB}" -f "$f"; done
 "${PSQL[@]}" -d "${DB}" -f supabase/seed.sql
 "${PSQL[@]}" -d "${DB}" -f supabase/local-tests/10_rls_and_rpc_test.sql
+# Repository <-> SQL contract test (server-only resolves to its empty build under react-server).
+CONTRACT_DB="${DB}" NODE_OPTIONS="--conditions=react-server" npx tsx scripts/supabase-contract-test.ts

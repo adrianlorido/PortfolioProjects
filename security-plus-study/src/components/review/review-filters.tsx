@@ -11,7 +11,15 @@ import { cn } from "@/lib/utils";
 
 const ANY = "__any";
 
-export function ReviewFilters({ topics, showResultFilter = true }: { topics: { id: string; name: string }[]; showResultFilter?: boolean }) {
+export function ReviewFilters({
+  topics,
+  showResultFilter = true,
+  showStudyFilters = true,
+}: {
+  topics: { id: string; name: string }[];
+  showResultFilter?: boolean;
+  showStudyFilters?: boolean;
+}) {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
@@ -69,8 +77,8 @@ export function ReviewFilters({ topics, showResultFilter = true }: { topics: { i
           ))}
         </div>
       )}
-      {chip("guessed", "Guessed")}
-      {chip("bookmarked", "Bookmarked")}
+      {showStudyFilters && chip("guessed", "Guessed")}
+      {showStudyFilters && chip("bookmarked", "Bookmarked")}
       <Select value={params.get("domain") ?? ANY} onValueChange={(v) => set("domain", v)}>
         <SelectTrigger className="h-9 w-auto min-w-36" aria-label="Domain">
           <SelectValue placeholder="Domain" />

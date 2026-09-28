@@ -60,6 +60,7 @@ export function AuthForm({
             type={f.type}
             autoComplete={f.autoComplete}
             placeholder={f.placeholder}
+            defaultValue={f.type === "password" ? undefined : state.values?.[f.name]}
             aria-invalid={Boolean(state.error) || undefined}
             aria-describedby={f.hint ? `${f.name}-hint` : undefined}
             required

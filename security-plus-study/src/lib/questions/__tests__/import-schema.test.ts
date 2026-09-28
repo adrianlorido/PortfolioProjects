@@ -63,6 +63,19 @@ describe("validateQuestion", () => {
     expect(issues.map((i) => i.path)).toEqual(expect.arrayContaining(["question", "domain", "explanation"]));
   });
 
+  it("reports every problem in one pass", () => {
+    const { issues } = validateQuestion({ question: "x", choices: ["only one"], domain: "nope" }, 0);
+    expect(issues.filter((i) => i.severity === "error").map((i) => i.path)).toEqual(
+      expect.arrayContaining(["explanation", "choices", "domain", "topics"]),
+    );
+  });
+
+  it("rejects wrong field types", () => {
+    const { input, issues } = validateQuestion({ ...base, choices: "A, B, C" }, 0);
+    expect(input).toBeNull();
+    expect(issues[0]).toMatchObject({ path: "choices", severity: "error" });
+  });
+
   it("warns (but accepts) when optional study aids are missing", () => {
     const { input, issues } = validateQuestion({ ...base, examClue: undefined, incorrectAnswerExplanations: undefined }, 0);
     expect(input).not.toBeNull();

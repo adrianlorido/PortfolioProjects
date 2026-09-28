@@ -69,6 +69,12 @@ export function QuizRunner({ sessionId, title, questions, initialAnswered, initi
   const questionStart = useRef(0);
   const answeredToday = useRef(goal.answeredToday);
   const nextButton = useRef<HTMLButtonElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // Marks the runner as interactive (keyboard shortcuts attached) for end-to-end tests.
+  useEffect(() => {
+    rootRef.current?.setAttribute("data-ready", "true");
+  }, []);
 
   const question = questions[index];
   const feedback = answered[question.id];
@@ -220,7 +226,7 @@ export function QuizRunner({ sessionId, title, questions, initialAnswered, initi
   const primaryLabel = feedback ? (allDone && (isLast || nextOpenIndex === -1) ? "Finish session" : "Next question") : "Submit answer";
 
   return (
-    <div className="flex min-h-dvh flex-col">
+    <div ref={rootRef} className="flex min-h-dvh flex-col">
       {/* Top bar */}
       <header className="sticky top-0 z-30 border-b bg-background/85 backdrop-blur-lg">
         <div className="mx-auto flex h-14 max-w-3xl items-center gap-2 px-3 sm:px-4">

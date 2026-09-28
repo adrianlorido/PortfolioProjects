@@ -93,7 +93,7 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
         {topicId && <input type="hidden" name="topic" value={topicId} />}
       </form>
       <Suspense>
-        <ReviewFilters topics={topics} showResultFilter={false} />
+        <ReviewFilters topics={topics} showResultFilter={false} showStudyFilters={false} />
       </Suspense>
 
       {results.items.length === 0 ? (

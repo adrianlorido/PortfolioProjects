@@ -56,12 +56,12 @@ export default async function AnalyticsPage() {
 
       <TrendsSection timeline={data.timeline} dailyGoal={data.settings.dailyGoal} />
 
-      <div className="grid gap-4 xl:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <DomainAccuracyChart domains={data.domains} />
         <DifficultyChart difficulty={data.difficulty} />
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[1.35fr_1fr]">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.35fr_1fr]">
         <Card>
           <CardHeader>
             <CardTitle>Study activity</CardTitle>

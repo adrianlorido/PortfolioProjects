@@ -1,0 +1,19 @@
+# Minimal Supabase CLI configuration for local development (`supabase start`).
+# Run `supabase init` to regenerate a full file if you need more options.
+project_id = "bastion-secplus"
+
+[db]
+major_version = 15
+
+[db.seed]
+enabled = true
+sql_paths = ["./seed.sql"]
+
+[auth]
+site_url = "http://localhost:3000"
+additional_redirect_urls = ["http://localhost:3000/auth/callback"]
+enable_signup = true
+
+[auth.email]
+enable_signup = true
+enable_confirmations = false

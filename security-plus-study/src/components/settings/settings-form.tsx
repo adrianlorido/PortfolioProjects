@@ -13,6 +13,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { saveSettingsAction } from "@/lib/actions/settings";
 import { DAILY_GOALS, QUIZ_SIZES } from "@/lib/config/study";
 import type { ThemePreference, UserSettings } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 function Row({ title, description, htmlFor, children }: { title: string; description: string; htmlFor?: string; children: React.ReactNode }) {
   return (
@@ -128,7 +129,12 @@ export function SettingsForm({ initial }: { initial: UserSettings }) {
           <span className="rounded-lg bg-secondary px-3 py-1.5 font-mono text-sm">{settings.timezone}</span>
         </Row>
       </div>
-      <div className="sticky bottom-20 mt-4 flex items-center justify-end gap-3 rounded-2xl border bg-card/95 p-3 backdrop-blur lg:bottom-4">
+      <div
+        className={cn(
+          "mt-4 flex items-center justify-end gap-3 rounded-2xl border bg-card/95 p-3 backdrop-blur",
+          dirty && "sticky bottom-20 shadow-lg lg:bottom-4",
+        )}
+      >
         <p className="mr-auto text-sm text-muted-foreground" aria-live="polite">
           {dirty ? "You have unsaved changes." : "All changes saved."}
         </p>

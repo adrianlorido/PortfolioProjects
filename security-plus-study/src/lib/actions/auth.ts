@@ -10,6 +10,12 @@ import { getSiteUrl, isSupabaseConfigured } from "@/lib/supabase/env";
 export interface AuthFormState {
   error?: string;
   message?: string;
+  /** Non-secret fields echoed back so the form keeps them after React resets it. Never includes passwords. */
+  values?: Record<string, string>;
+}
+
+function keep(formData: FormData, ...names: string[]): Record<string, string> {
+  return Object.fromEntries(names.map((n) => [n, String(formData.get(n) ?? "")]));
 }
 
 const emailSchema = z.string().trim().toLowerCase().email("Enter a valid email address.").max(254);
@@ -41,18 +47,19 @@ export async function signInAction(_prev: AuthFormState, formData: FormData): Pr
     email: formData.get("email"),
     password: formData.get("password"),
   });
-  if (!parsed.success) return { error: parsed.error.issues[0].message };
+  const values = keep(formData, "email");
+  if (!parsed.success) return { error: parsed.error.issues[0].message, values };
   const { email, password } = parsed.data;
 
   if (isSupabaseConfigured()) {
     const { createSupabaseServerClient } = await import("@/lib/supabase/server");
     const supabase = await createSupabaseServerClient();
     const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) return { error: error.message === "Email not confirmed" ? "Please confirm your email address first." : "Incorrect email or password." };
+    if (error) return { error: error.message === "Email not confirmed" ? "Please confirm your email address first." : "Incorrect email or password.", values };
   } else {
     const { demoSignIn } = await import("@/lib/data/demo/demo-users");
     const session = demoSignIn(email, password);
-    if (!session) return { error: "Incorrect email or password." };
+    if (!session) return { error: "Incorrect email or password.", values };
     await setDemoCookie(session.token);
   }
   redirect(safeNext(formData.get("next")));
@@ -75,7 +82,8 @@ export async function signUpAction(_prev: AuthFormState, formData: FormData): Pr
       password: passwordSchema,
     })
     .safeParse({ displayName: formData.get("displayName"), email: formData.get("email"), password: formData.get("password") });
-  if (!parsed.success) return { error: parsed.error.issues[0].message };
+  const values = keep(formData, "displayName", "email");
+  if (!parsed.success) return { error: parsed.error.issues[0].message, values };
   const { displayName, email, password } = parsed.data;
 
   if (isSupabaseConfigured()) {
@@ -86,12 +94,12 @@ export async function signUpAction(_prev: AuthFormState, formData: FormData): Pr
       password,
       options: { data: { display_name: displayName }, emailRedirectTo: `${await origin()}/auth/callback?next=/dashboard` },
     });
-    if (error) return { error: error.message };
+    if (error) return { error: error.message, values };
     if (!data.session) return { message: "Check your email to confirm your account, then sign in." };
   } else {
     const { demoSignUp } = await import("@/lib/data/demo/demo-users");
     const result = demoSignUp(email, password, displayName);
-    if ("error" in result) return { error: result.error };
+    if ("error" in result) return { error: result.error, values };
     await setDemoCookie(result.token);
   }
   redirect("/dashboard?welcome=1");
@@ -110,7 +118,7 @@ export async function signOutAction(): Promise<void> {
 
 export async function requestPasswordResetAction(_prev: AuthFormState, formData: FormData): Promise<AuthFormState> {
   const parsed = emailSchema.safeParse(formData.get("email"));
-  if (!parsed.success) return { error: parsed.error.issues[0].message };
+  if (!parsed.success) return { error: parsed.error.issues[0].message, values: keep(formData, "email") };
   if (!isSupabaseConfigured()) {
     return {
       message: "Demo mode doesn't send email. Sign in, then change your password from the reset page, or use the demo account.",

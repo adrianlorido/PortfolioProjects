@@ -58,6 +58,12 @@ export function ExamRunner({ examId, title, questions, initialResponses, expires
   const offset = useRef(0);
   const submittedRef = useRef(false);
   const warned = useRef(new Set<number>());
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // Marks the runner as interactive (keyboard shortcuts attached) for end-to-end tests.
+  useEffect(() => {
+    rootRef.current?.setAttribute("data-ready", "true");
+  }, []);
 
   const question = questions[index];
   const response = responses[question.id] ?? { selectedChoiceIds: [], flagged: false };
@@ -214,7 +220,7 @@ export function ExamRunner({ examId, title, questions, initialResponses, expires
   );
 
   return (
-    <div className="flex min-h-dvh flex-col">
+    <div ref={rootRef} className="flex min-h-dvh flex-col">
       <header className="sticky top-0 z-30 border-b bg-background/85 backdrop-blur-lg">
         <div className="mx-auto flex h-16 max-w-6xl items-center gap-3 px-3 sm:px-6">
           <div className="min-w-0 flex-1">

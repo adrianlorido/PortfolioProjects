@@ -80,7 +80,7 @@ export default async function DomainPage({ params }: PageProps<"/study/domains/[
         </CardContent>
       </Card>
 
-      <div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1.4fr_1fr]">
         <Card>
           <CardHeader>
             <CardTitle>Topics in this domain</CardTitle>

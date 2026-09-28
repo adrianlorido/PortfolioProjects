@@ -28,7 +28,7 @@ export default async function QuestionPage({ params }: PageProps<"/questions/[id
   const { question, state } = detail;
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[1fr_18rem]">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_18rem]">
       <div className="min-w-0 space-y-4">
         <Button variant="ghost" size="sm" asChild className="-ml-2 text-muted-foreground">
           <Link href="/search">

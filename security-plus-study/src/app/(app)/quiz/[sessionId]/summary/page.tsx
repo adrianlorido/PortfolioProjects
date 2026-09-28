@@ -108,7 +108,7 @@ export default async function QuizSummaryPage({ params }: PageProps<"/quiz/[sess
         </Button>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_1.4fr]">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_1.4fr]">
         <Card>
           <CardHeader>
             <CardTitle>By domain</CardTitle>

@@ -6,12 +6,18 @@
  * (pass --skip-invalid to import only the valid rows). Provide an "id" (UUID)
  * on each question to make re-imports update instead of duplicate.
  */
+import { existsSync } from "node:fs";
+
 import { createClient } from "@supabase/supabase-js";
 
 import { validateImport } from "../src/lib/questions/import-schema";
 import { toUpsertPayload } from "../src/lib/questions/upsert-payload";
 import type { QuestionInput } from "../src/lib/types";
 import { loadJsonFiles } from "./load-json-files";
+
+for (const file of [".env.local", ".env"]) {
+  if (existsSync(file)) process.loadEnvFile(file);
+}
 
 const args = process.argv.slice(2);
 const skipInvalid = args.includes("--skip-invalid");
