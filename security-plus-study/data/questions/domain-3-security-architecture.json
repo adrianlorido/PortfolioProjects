@@ -1,0 +1,423 @@
+{
+  "indexBase": 0,
+  "questions": [
+    {
+      "question": "Under the shared responsibility model for Infrastructure as a Service (IaaS), which party is typically responsible for patching the guest operating system on a virtual machine?",
+      "choices": ["The customer", "The cloud provider", "The hypervisor vendor", "Responsibility is always split evenly by law"],
+      "correctAnswers": [0],
+      "domain": 3,
+      "topics": ["Cloud Security"],
+      "difficulty": "easy",
+      "explanation": "In IaaS, the provider secures the physical hosts, network, and hypervisor. The customer manages everything from the guest operating system upward, including patches.",
+      "incorrectAnswerExplanations": [null, "The provider does not manage the customer's guest OS in IaaS.", "The hypervisor vendor is not responsible for tenants' guest operating systems.", "Responsibilities are defined by the service model and contract, not split evenly."],
+      "examClue": "IaaS: you manage the OS and up. PaaS: you manage apps and data. SaaS: you manage users and data.",
+      "memoryTip": "The more 'as a service', the less you manage."
+    },
+    {
+      "question": "Which cloud service model gives users a complete, ready-to-use application where the provider manages the infrastructure, platform, and software?",
+      "choices": ["IaaS", "PaaS", "SaaS", "On-premises"],
+      "correctAnswers": [2],
+      "domain": 3,
+      "topics": ["Cloud Security"],
+      "difficulty": "easy",
+      "explanation": "Software as a Service delivers a finished application, such as web email. The customer is mainly responsible for its data, user accounts, and access settings.",
+      "incorrectAnswerExplanations": ["IaaS provides virtual servers, storage, and networking that the customer builds on.", "PaaS provides a platform for customers to deploy their own applications.", null, "On-premises means the organization runs everything itself."],
+      "examClue": "Just log in and use it = SaaS.",
+      "memoryTip": "SaaS = software, served."
+    },
+    {
+      "question": "A company discovers employees are using dozens of unsanctioned SaaS applications. It wants visibility into this usage and the ability to enforce data policies between users and cloud services. Which solution BEST fits?",
+      "choices": ["Web application firewall", "Cloud access security broker (CASB)", "Next-generation firewall at the data center", "Hardware security module"],
+      "correctAnswers": [1],
+      "domain": 3,
+      "topics": ["Cloud Security", "DLP"],
+      "difficulty": "medium",
+      "scenario": true,
+      "explanation": "A CASB sits between users and cloud services to discover shadow IT, enforce access and data-loss policies, and monitor activity across SaaS applications.",
+      "incorrectAnswerExplanations": ["A WAF protects a web application the company hosts from attacks; it does not govern employees' use of SaaS apps.", null, "A data center firewall cannot see traffic from remote users going directly to cloud services.", "An HSM stores and processes cryptographic keys."],
+      "examClue": "Visibility and policy control over cloud app usage = CASB.",
+      "memoryTip": "CASB = the security broker between users and the cloud."
+    },
+    {
+      "question": "What is a key security benefit of managing cloud infrastructure with infrastructure as code (IaC)?",
+      "choices": [
+        "It removes the need to patch systems",
+        "Configurations are consistent, reviewable, and version-controlled, which reduces misconfiguration and drift",
+        "All data is automatically encrypted",
+        "It transfers all security responsibility to the cloud provider"
+      ],
+      "correctAnswers": [1],
+      "domain": 3,
+      "topics": ["Cloud Security", "Automation & Orchestration"],
+      "difficulty": "medium",
+      "explanation": "IaC defines infrastructure in code templates. Changes can be peer reviewed, scanned for misconfigurations, versioned, and deployed identically every time.",
+      "incorrectAnswerExplanations": ["Systems deployed through IaC still need patching.", null, "Encryption must still be configured; IaC does not add it automatically.", "The shared responsibility model still applies."],
+      "examClue": "IaC benefits: repeatability, consistency, version control, and fewer manual errors.",
+      "memoryTip": "If infrastructure is code, it can be reviewed like code."
+    },
+    {
+      "question": "A misconfigured cloud storage bucket exposed customer files to the public internet. Under the shared responsibility model, who was responsible for the bucket's access configuration?",
+      "choices": ["The cloud provider", "The customer", "The customers' internet service providers", "No one, because storage is public by default"],
+      "correctAnswers": [1],
+      "domain": 3,
+      "topics": ["Cloud Security", "Data Protection"],
+      "difficulty": "medium",
+      "scenario": true,
+      "explanation": "Providers secure the storage service itself, but customers are responsible for how they configure access to their own data. Most cloud breaches stem from customer misconfiguration.",
+      "incorrectAnswerExplanations": ["The provider secures the underlying service, not each tenant's access settings.", null, "ISPs have no role in configuring cloud storage permissions.", "Major providers default to private storage; access must be configured."],
+      "examClue": "Customer data and customer configuration = customer responsibility, in every cloud model.",
+      "memoryTip": "The provider secures the cloud; you secure what you put in it."
+    },
+    {
+      "question": "An attacker breaks out of a guest virtual machine and gains access to the hypervisor and other VMs running on the same host. What is this called?",
+      "choices": ["VM sprawl", "VM escape", "Resource reuse", "Container drift"],
+      "correctAnswers": [1],
+      "domain": 3,
+      "topics": ["Virtualization", "Vulnerabilities"],
+      "difficulty": "medium",
+      "explanation": "VM escape breaks the isolation between a guest and the hypervisor, potentially compromising every VM on the host. Keeping hypervisors patched is the main defense.",
+      "incorrectAnswerExplanations": ["VM sprawl is an uncontrolled growth of unmanaged VMs.", null, "Resource reuse is when memory or storage from one tenant is not properly cleared before another uses it.", "Container drift is when a running container no longer matches its image."],
+      "examClue": "Guest breaks out to the host = VM escape.",
+      "memoryTip": "Escape the VM, own the host."
+    },
+    {
+      "question": "An organization has hundreds of undocumented, unpatched virtual machines left over from short-term projects. Which issue does this describe?",
+      "choices": ["VM escape", "VM sprawl", "Hypervisor hardening", "Microsegmentation"],
+      "correctAnswers": [1],
+      "domain": 3,
+      "topics": ["Virtualization", "Asset Management"],
+      "difficulty": "easy",
+      "scenario": true,
+      "explanation": "VM sprawl occurs when virtual machines are created faster than they are tracked and maintained, leaving forgotten systems that miss patches and monitoring.",
+      "incorrectAnswerExplanations": ["VM escape is breaking out of a guest to the host.", null, "Hardening reduces the attack surface; it is a solution, not the problem described.", "Microsegmentation is a network control, not an inventory problem."],
+      "examClue": "Too many unmanaged VMs = sprawl. Solve with inventory and lifecycle management.",
+      "memoryTip": "Sprawl is VMs spreading like weeds."
+    },
+    {
+      "question": "Which statement BEST describes a security difference between containers and virtual machines?",
+      "choices": [
+        "Containers share the host operating system kernel, so a kernel vulnerability can affect every container on the host",
+        "Each container runs its own full guest operating system",
+        "Virtual machines share one kernel, while containers each have their own",
+        "Containers cannot be isolated from each other in any way"
+      ],
+      "correctAnswers": [0],
+      "domain": 3,
+      "topics": ["Virtualization", "Cloud Security"],
+      "difficulty": "hard",
+      "explanation": "Containers are lightweight because they share the host kernel. That efficiency means isolation is weaker than a VM's, where each guest has its own kernel on top of a hypervisor.",
+      "incorrectAnswerExplanations": [null, "Containers package an application and its dependencies, not a full operating system.", "This reverses the relationship: VMs each have their own kernel.", "Containers use namespaces and control groups for isolation; it is weaker than VMs but not absent."],
+      "examClue": "Shared kernel = containers. Separate kernels on a hypervisor = VMs.",
+      "memoryTip": "Containers are apartments sharing one foundation; VMs are separate houses."
+    },
+    {
+      "question": "Administrators must manage servers in a restricted network zone without exposing management ports to the rest of the network. Which solution provides a single hardened and monitored entry point for this administration?",
+      "choices": ["Forward proxy", "Jump server", "Load balancer", "Honeypot"],
+      "correctAnswers": [1],
+      "domain": 3,
+      "topics": ["Network Security", "Segmentation"],
+      "difficulty": "medium",
+      "scenario": true,
+      "explanation": "A jump server (jump box or bastion host) is the only system allowed to connect into the secure zone. Admins connect to it first, which centralizes access control and logging.",
+      "incorrectAnswerExplanations": ["A forward proxy mediates users' outbound web traffic.", null, "A load balancer distributes client traffic across servers.", "A honeypot is a decoy that attracts attackers."],
+      "examClue": "Single controlled path for admins into a secure zone = jump server.",
+      "memoryTip": "Jump through the one hardened door."
+    },
+    {
+      "question": "Which device inspects HTTP and HTTPS traffic to protect a web application from attacks such as SQL injection and cross-site scripting?",
+      "choices": ["Web application firewall (WAF)", "Stateless packet filter", "Network-based IDS on a SPAN port", "Layer 2 switch"],
+      "correctAnswers": [0],
+      "domain": 3,
+      "topics": ["Firewalls", "Application Security"],
+      "difficulty": "easy",
+      "explanation": "A WAF understands application-layer web traffic and blocks malicious patterns targeting web applications.",
+      "incorrectAnswerExplanations": [null, "Packet filters look at addresses and ports, not the contents of web requests.", "An IDS on a SPAN port can alert but cannot block, and it is not specific to web applications.", "A switch forwards frames and does not inspect application payloads."],
+      "examClue": "Protecting a web app from web attacks = WAF.",
+      "memoryTip": "WAF guards the web app's front door."
+    },
+    {
+      "question": "How does a stateful firewall differ from a stateless packet filter?",
+      "choices": [
+        "It tracks active connections and automatically allows return traffic for established sessions",
+        "It decrypts all TLS traffic by default",
+        "It can only filter by MAC address",
+        "It evaluates each packet in isolation with no memory of prior packets"
+      ],
+      "correctAnswers": [0],
+      "domain": 3,
+      "topics": ["Firewalls", "Network Security"],
+      "difficulty": "medium",
+      "explanation": "A stateful firewall keeps a state table of connections, so it knows whether a packet belongs to a legitimate established session.",
+      "incorrectAnswerExplanations": [null, "TLS inspection is a separate feature and is not implied by stateful filtering.", "Stateful firewalls work mainly with IP addresses, ports, and connection state.", "Evaluating packets in isolation describes a stateless filter."],
+      "examClue": "Remembers connections = stateful. Judges each packet alone = stateless.",
+      "memoryTip": "Stateful firewalls have a memory."
+    },
+    {
+      "question": "A firewall has these rules in order: 1) Allow TCP 443 from any to 10.0.0.5. 2) Deny any traffic from 203.0.113.0/24. 3) Deny all. A host at 203.0.113.50 can still reach 10.0.0.5 over HTTPS. Why?",
+      "choices": [
+        "The implicit deny rule is disabled",
+        "Rules are processed top-down, and rule 1 matches the traffic before the deny rule is evaluated",
+        "Stateful inspection bypasses deny rules",
+        "The /24 subnet mask does not include 203.0.113.50"
+      ],
+      "correctAnswers": [1],
+      "domain": 3,
+      "topics": ["Firewalls"],
+      "difficulty": "hard",
+      "scenario": true,
+      "explanation": "Firewall rules are usually evaluated in order and the first match wins. To block that subnet, the deny rule must be placed above the broad allow rule.",
+      "incorrectAnswerExplanations": ["An explicit 'deny all' is present, and it is never reached for this traffic anyway.", null, "Stateful inspection tracks connections; it does not override rule order.", "203.0.113.50 is inside 203.0.113.0/24."],
+      "examClue": "Unexpected traffic allowed? Check rule order: specific denies must come before broad allows.",
+      "memoryTip": "First match wins."
+    },
+    {
+      "question": "What is the key difference between an intrusion detection system (IDS) and an intrusion prevention system (IPS)?",
+      "choices": [
+        "An IPS is placed inline and can block malicious traffic; an IDS monitors and alerts",
+        "An IDS is always host-based and an IPS is always network-based",
+        "An IDS uses signatures, while an IPS can only use anomaly detection",
+        "An IPS only analyzes logs after an incident"
+      ],
+      "correctAnswers": [0],
+      "domain": 3,
+      "topics": ["IDS/IPS"],
+      "difficulty": "easy",
+      "explanation": "An IPS sits in the traffic path so it can drop or reset malicious sessions. An IDS typically watches a copy of traffic and raises alerts.",
+      "incorrectAnswerExplanations": [null, "Both come in host-based and network-based forms.", "Both can use signature-based and anomaly-based detection.", "An IPS acts in real time; it does not only review logs."],
+      "examClue": "Inline + block = IPS. Passive + alert = IDS.",
+      "memoryTip": "Detection tells you; prevention stops it."
+    },
+    {
+      "question": "Which detection method compares activity against a baseline of normal behavior and can therefore detect previously unknown attacks?",
+      "choices": ["Signature-based", "Anomaly-based", "Hash-based", "Allow-list-based"],
+      "correctAnswers": [1],
+      "domain": 3,
+      "topics": ["IDS/IPS", "Logging & Monitoring"],
+      "difficulty": "medium",
+      "explanation": "Anomaly (behavior-based) detection flags deviations from a learned baseline, which can reveal zero-day activity but also tends to produce more false positives.",
+      "incorrectAnswerExplanations": ["Signature-based detection only recognizes known attack patterns.", null, "Hash matching identifies known files.", "An allow list permits approved items; it does not model normal behavior."],
+      "examClue": "Baseline + deviation = anomaly-based. Known patterns = signature-based.",
+      "memoryTip": "Anomaly spots the odd one out."
+    },
+    {
+      "question": "During a holiday sale, an inline IPS blocks legitimate customer checkout requests after misidentifying them as attacks. What type of result is this?",
+      "choices": ["False positive", "False negative", "True positive", "True negative"],
+      "correctAnswers": [0],
+      "domain": 3,
+      "topics": ["IDS/IPS", "Vulnerability Management"],
+      "difficulty": "medium",
+      "scenario": true,
+      "explanation": "A false positive is benign activity incorrectly flagged as malicious. For an inline IPS, false positives block legitimate business, so tuning is essential.",
+      "incorrectAnswerExplanations": [null, "A false negative is a real attack that goes undetected.", "A true positive is a real attack correctly detected.", "A true negative is benign activity correctly allowed."],
+      "examClue": "Good traffic flagged as bad = false positive. Bad traffic missed = false negative.",
+      "memoryTip": "False positive: the alarm cried wolf."
+    },
+    {
+      "question": "Which network zone hosts public-facing services such as web servers while keeping them separated from the internal network?",
+      "choices": ["Intranet", "Screened subnet (DMZ)", "Air-gapped network", "Management VLAN"],
+      "correctAnswers": [1],
+      "domain": 3,
+      "topics": ["Segmentation", "Network Security"],
+      "difficulty": "easy",
+      "explanation": "A screened subnet sits between the internet and the internal network, allowing public access to specific services while limiting access inward.",
+      "incorrectAnswerExplanations": ["The intranet is the internal network the DMZ protects.", null, "An air-gapped network has no connection at all, so it cannot host public services.", "A management VLAN carries administrative traffic and should never be public."],
+      "examClue": "Public servers kept apart from internal systems = screened subnet.",
+      "memoryTip": "The DMZ is the lobby, not the office."
+    },
+    {
+      "question": "A hospital wants to ensure that if a guest Wi-Fi device is compromised, it cannot reach medical devices. Staff laptops still need access to both the internet and clinical systems. What is the BEST approach?",
+      "choices": [
+        "Enable WPA3 on the guest network only",
+        "Place guests, staff, and medical devices on separate segments with firewall rules controlling traffic between them",
+        "Keep a single flat network and add an IDS",
+        "Hide the SSID of the guest network"
+      ],
+      "correctAnswers": [1],
+      "domain": 3,
+      "topics": ["Segmentation", "Network Security", "IoT & ICS/SCADA"],
+      "difficulty": "hard",
+      "scenario": true,
+      "explanation": "Segmentation with controlled inter-segment rules limits lateral movement. Guests reach only the internet, medical devices are isolated, and staff are allowed only what they need.",
+      "incorrectAnswerExplanations": ["WPA3 protects the wireless link but does not stop a compromised guest from reaching internal systems.", null, "A flat network allows lateral movement; an IDS only alerts after the fact.", "Hiding an SSID is not a security control; the network can still be discovered."],
+      "examClue": "Limit what a compromised device can reach = segmentation with rules between segments.",
+      "memoryTip": "Separate the rooms, lock the doors between them."
+    },
+    {
+      "question": "A classified research system has no physical or wireless connection to any other network. What is this approach called?",
+      "choices": ["Microsegmentation", "Air gap", "Screened subnet", "Logical segmentation with VLANs"],
+      "correctAnswers": [1],
+      "domain": 3,
+      "topics": ["Segmentation"],
+      "difficulty": "easy",
+      "explanation": "An air gap physically isolates a system so no network path exists. Data must be moved manually, which introduces removable-media risks that must be controlled.",
+      "incorrectAnswerExplanations": ["Microsegmentation applies fine-grained network policies but systems remain connected.", null, "A screened subnet is connected to both the internet and the internal network.", "VLANs separate traffic logically on shared hardware."],
+      "examClue": "No connection at all = air gap.",
+      "memoryTip": "Nothing but air between it and everything else."
+    },
+    {
+      "question": "A remote employee's VPN sends only traffic destined for corporate networks through the tunnel, while general internet browsing goes directly to the internet. What is this configuration?",
+      "choices": ["Full tunnel", "Split tunnel", "Site-to-site VPN", "Clientless VPN"],
+      "correctAnswers": [1],
+      "domain": 3,
+      "topics": ["VPN & Remote Access"],
+      "difficulty": "medium",
+      "scenario": true,
+      "explanation": "A split tunnel routes only corporate-bound traffic through the VPN. It saves bandwidth but means internet traffic bypasses corporate security inspection.",
+      "incorrectAnswerExplanations": ["A full tunnel sends all traffic through the VPN.", null, "Site-to-site VPNs connect entire networks, not individual remote users.", "A clientless VPN uses a browser-based portal rather than a full client."],
+      "examClue": "Some traffic in the tunnel, some outside = split tunnel.",
+      "memoryTip": "Split tunnel splits the traffic."
+    },
+    {
+      "question": "Which IPsec component provides confidentiality through encryption in addition to integrity and authentication of the payload?",
+      "choices": ["Authentication Header (AH)", "Encapsulating Security Payload (ESP)", "Internet Key Exchange (IKE)", "Generic Routing Encapsulation (GRE)"],
+      "correctAnswers": [1],
+      "domain": 3,
+      "topics": ["VPN & Remote Access", "Encryption", "Secure Protocols"],
+      "difficulty": "hard",
+      "explanation": "ESP encrypts the payload and can also provide integrity and authentication. AH provides integrity and authentication only, with no encryption.",
+      "incorrectAnswerExplanations": ["AH provides integrity and origin authentication but no confidentiality.", null, "IKE negotiates security associations and exchanges keys; it does not protect the payload itself.", "GRE is a tunneling protocol without built-in encryption."],
+      "examClue": "Need encryption in IPsec? ESP. AH = authentication only.",
+      "memoryTip": "ESP encrypts; AH just authenticates."
+    },
+    {
+      "question": "Data that is actively being processed in a server's memory is in which state?",
+      "choices": ["Data at rest", "Data in transit", "Data in use", "Data in escrow"],
+      "correctAnswers": [2],
+      "domain": 3,
+      "topics": ["Data Protection"],
+      "difficulty": "easy",
+      "explanation": "Data in use is being accessed or processed in RAM or the CPU. It is often unencrypted at that point, which is why secure enclaves exist.",
+      "incorrectAnswerExplanations": ["Data at rest is stored on disks, databases, or backups.", "Data in transit is moving across a network.", null, "Escrow refers to storing keys with a third party, not a data state."],
+      "examClue": "Rest = stored. Transit = moving. Use = processing in memory.",
+      "memoryTip": "In use means in RAM."
+    },
+    {
+      "question": "A European company must ensure customer data is stored only in data centers physically located within the EU because of local laws. Which concept does this describe?",
+      "choices": ["Data classification", "Data sovereignty", "Data masking", "Geofencing"],
+      "correctAnswers": [1],
+      "domain": 3,
+      "topics": ["Data Protection", "Compliance", "Cloud Security"],
+      "difficulty": "medium",
+      "scenario": true,
+      "explanation": "Data sovereignty means data is subject to the laws of the country where it is stored, so organizations must control where their data physically resides.",
+      "incorrectAnswerExplanations": ["Classification labels data by sensitivity; it does not govern location.", null, "Masking hides parts of data values.", "Geofencing controls device behavior based on location."],
+      "examClue": "Where data is stored + which country's laws apply = data sovereignty.",
+      "memoryTip": "The data is subject to its sovereign's laws."
+    },
+    {
+      "question": "Which technology distributes incoming requests across multiple servers to improve availability and performance?",
+      "choices": ["Load balancer", "Forward proxy", "Jump server", "Network tap"],
+      "correctAnswers": [0],
+      "domain": 3,
+      "topics": ["Resilience", "Network Security"],
+      "difficulty": "easy",
+      "explanation": "A load balancer spreads traffic across a pool of servers and removes failed servers from rotation, improving capacity and availability.",
+      "incorrectAnswerExplanations": [null, "A forward proxy mediates outbound client requests.", "A jump server provides controlled administrative access.", "A network tap copies traffic for monitoring."],
+      "examClue": "Spread requests across servers = load balancer.",
+      "memoryTip": "Balance the load, keep the lights on."
+    },
+    {
+      "question": "A company requires its customer web application to stay online even if an entire data center is lost. Which design BEST meets this requirement?",
+      "choices": [
+        "RAID 5 storage on the web server",
+        "Active-active deployment across geographically separate sites with global load balancing",
+        "Nightly tape backups stored in the same data center",
+        "An uninterruptible power supply for the server rack"
+      ],
+      "correctAnswers": [1],
+      "domain": 3,
+      "topics": ["Resilience", "Disaster Recovery"],
+      "difficulty": "hard",
+      "scenario": true,
+      "explanation": "Surviving the loss of a whole site requires redundancy in another location. Active-active sites let traffic shift automatically when one site fails.",
+      "incorrectAnswerExplanations": ["RAID protects against disk failure within one server, not site loss.", null, "Backups in the same building are lost with the site and restoring takes time.", "A UPS covers short power interruptions, not the loss of the site."],
+      "examClue": "Match the redundancy to the failure: disk = RAID, power = UPS/generator, site = geographic redundancy.",
+      "memoryTip": "To survive a site loss, be in two places at once."
+    },
+    {
+      "question": "A company runs a full backup every Sunday and, Monday through Saturday, backs up all changes made since the last full backup. A failure occurs Friday before that day's backup. How many backup sets are needed to restore?",
+      "choices": ["One: Thursday's backup", "Two: Sunday's full backup and Thursday's backup", "Five: Sunday's full backup and each daily backup through Thursday", "Six: every backup since Sunday plus Friday's"],
+      "correctAnswers": [1],
+      "domain": 3,
+      "topics": ["Backups", "Disaster Recovery"],
+      "difficulty": "medium",
+      "scenario": true,
+      "explanation": "Backing up all changes since the last full backup is a differential backup. Restoring needs only the last full backup plus the most recent differential.",
+      "incorrectAnswerExplanations": ["A differential only contains changes since Sunday; it needs the full backup as a base.", null, "Restoring every daily set is required for incremental backups, not differentials.", "Friday's backup was never taken."],
+      "examClue": "Differential = full + last differential. Incremental = full + every incremental since.",
+      "memoryTip": "Differential grows daily but restores in two steps."
+    },
+    {
+      "question": "Ransomware encrypted a company's file servers and also encrypted the backups stored on a network share the servers could write to. Which backup strategy would BEST have prevented losing the backups?",
+      "choices": [
+        "More frequent incremental backups to the same share",
+        "Immutable or offline (air-gapped) backup copies",
+        "Replacing the storage with a RAID 10 array",
+        "Snapshots stored on the same volume as the data"
+      ],
+      "correctAnswers": [1],
+      "domain": 3,
+      "topics": ["Backups", "Malware", "Resilience"],
+      "difficulty": "hard",
+      "scenario": true,
+      "explanation": "Backups that cannot be modified or reached from production systems survive ransomware. Immutability and offline copies break the attacker's path to the backups.",
+      "incorrectAnswerExplanations": ["More frequent backups to a writable share would simply be encrypted too.", null, "RAID provides redundancy against disk failure, not protection from malicious encryption.", "Snapshots on the same volume can be deleted or encrypted along with the data."],
+      "examClue": "Ransomware + backups also encrypted = need immutable, offline, or logically separated backups.",
+      "memoryTip": "If malware can write to it, malware can ruin it."
+    },
+    {
+      "question": "Which recovery site is fully equipped with hardware, software, and near-real-time data so operations can resume within minutes to hours?",
+      "choices": ["Cold site", "Warm site", "Hot site", "Mobile site"],
+      "correctAnswers": [2],
+      "domain": 3,
+      "topics": ["Disaster Recovery", "Business Impact Analysis"],
+      "difficulty": "easy",
+      "explanation": "A hot site mirrors production and can take over almost immediately. It is the fastest and most expensive option.",
+      "incorrectAnswerExplanations": ["A cold site provides space and power but little or no equipment, so recovery takes the longest.", "A warm site has some equipment but requires data restoration and setup.", null, "A mobile site is a portable facility; readiness depends on how it is equipped."],
+      "examClue": "Fastest recovery, highest cost = hot. Cheapest, slowest = cold.",
+      "memoryTip": "Hot is ready now; cold starts from scratch."
+    },
+    {
+      "question": "Which TWO statements describe a warm recovery site?",
+      "choices": ["Some hardware and network connectivity are already in place", "Data must be restored from backups before operations resume", "Data is continuously mirrored in real time", "It provides only an empty building with power", "It is the fastest recovery option available"],
+      "correctAnswers": [0, 1],
+      "domain": 3,
+      "topics": ["Disaster Recovery"],
+      "difficulty": "medium",
+      "explanation": "A warm site is a middle ground: equipment and connectivity exist, but current data must be loaded and systems configured before cutover.",
+      "incorrectAnswerExplanations": [null, null, "Real-time mirroring describes a hot site.", "An empty building with power describes a cold site.", "The fastest option is a hot site."],
+      "examClue": "Warm = partially ready; expect restore time of hours to days.",
+      "memoryTip": "Warm needs a little heating up."
+    },
+    {
+      "question": "A water treatment plant's SCADA system uses legacy protocols with no authentication and cannot be replaced this year. What is the BEST way to reduce risk?",
+      "choices": [
+        "Connect it directly to the internet so the vendor can patch it remotely",
+        "Segment the ICS network and strictly control and monitor all traffic to it",
+        "Install consumer antivirus software on each PLC",
+        "Disable logging on the control network to reduce latency"
+      ],
+      "correctAnswers": [1],
+      "domain": 3,
+      "topics": ["IoT & ICS/SCADA", "Segmentation", "Mitigation Techniques"],
+      "difficulty": "medium",
+      "scenario": true,
+      "explanation": "ICS systems often cannot be changed, so risk is reduced by isolating them, allowing only required connections, and monitoring for anomalies.",
+      "incorrectAnswerExplanations": ["Direct internet exposure of unauthenticated control systems is extremely dangerous.", null, "PLCs generally cannot run consumer antivirus, and it would not fix protocol weaknesses.", "Removing logs eliminates the visibility needed to detect attacks."],
+      "examClue": "Legacy ICS that cannot be changed = segment, restrict, monitor.",
+      "memoryTip": "Critical infrastructure goes behind the strongest fence."
+    },
+    {
+      "question": "Which device provides short-term battery power to keep systems running through a brief outage or until a generator starts?",
+      "choices": ["Uninterruptible power supply (UPS)", "Power distribution unit (PDU)", "Surge protector", "Load balancer"],
+      "correctAnswers": [0],
+      "domain": 3,
+      "topics": ["Resilience"],
+      "difficulty": "easy",
+      "explanation": "A UPS supplies battery power instantly when utility power fails, bridging the gap until power returns or a generator takes over.",
+      "incorrectAnswerExplanations": [null, "A PDU distributes power to equipment in a rack but does not store it.", "A surge protector guards against voltage spikes, not outages.", "A load balancer distributes network traffic."],
+      "examClue": "Brief outage bridge = UPS. Long outage = generator.",
+      "memoryTip": "UPS keeps you up for a few minutes."
+    }
+  ]
+}
