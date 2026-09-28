@@ -243,6 +243,13 @@ Level intervals: Learning 1 day, Familiar 4 days, Strong 8 days, Mastered 21 day
 - `npm test` — 90+ Vitest tests: grading and multiple-answer scoring, exam scoring and blueprint allocation, quiz generation for every mode (including Hard Mode and weak-topic prioritization), spaced repetition and mastery, streaks and analytics, import validation, the bundled bank's integrity, and an end-to-end service flow on the demo adapter (user isolation, double-submit, confidence re-scheduling, exam submission).
 - `npm run test:db` — applies the migration and seed to a throwaway database on any PostgreSQL 15+ server (a small stub stands in for Supabase's `auth` schema), asserts RLS isolation between users, admin-only writes, role-escalation prevention and every RPC, then runs a **contract test** that drives the real `SupabaseRepository` against those SQL functions. Uses standard `PGHOST`/`PGPORT`/`PGUSER`/`PGPASSWORD` variables.
 
+### Continuous integration
+
+`.github/workflows/security-plus-study.yml` (at the repository root) runs on changes under `security-plus-study/`:
+
+- **checks** — lint, typecheck (`next typegen` + `tsc`), Vitest, question-bank validation, a check that `supabase/seed.sql` was regenerated after bank edits, and a production build in demo mode.
+- **database** — `npm run test:db` against a PostgreSQL 16 service container.
+
 ## Keyboard shortcuts
 
 | Key | Quiz | Exam |
