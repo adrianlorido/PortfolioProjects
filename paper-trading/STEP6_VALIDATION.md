@@ -62,11 +62,11 @@ Scope: **simulator correctness**, not strategy profitability. Branch
 | 6c | Replay-to-end interrupted mid-run | Completed events kept; retry with the same key resumes; no duplicates | As expected: 3 committed, 3 resumed, then idempotent | E2E `S6::test_replay_to_end_interrupted_mid_run_resumes_without_duplicates` | — |
 | 7 | Closing order canceled or expired | Intent persists; retry on the next valid quote with EXIT_RETRY at the current bid; original reason recorded | As expected | E2E `T::test_cancel_exit_keeps_intent_and_retries`, `T::test_exit_order_expiry_retries_and_survives_restart`, `S6` 1a | — |
 | 8 | Session end with open exposure | Open orders expired (SESSION_END), reservations released, run INCOMPLETE, position STALE at its last bid, no closed trade, intent unresolved | As expected, with a closing order still OPEN at the close | E2E `S6::test_session_end_with_open_closing_order`, `T::test_session_end_with_open_exposure_is_incomplete`, `T::test_session_end_expires_open_orders` | — |
-| 9 | Multiple qualifying contracts | Among in-scope contracts with 30–45 days to expiration and strike ≥ underlying: **earliest expiration, then lowest strike, then contract ID** (rule 6). Only quotes already replayed are used; no substitution when the selected contract has no current quote; out-of-window expiries skipped | As expected. An earlier expiration with a higher strike beats a later expiration with a lower strike (see the interpretation note below) | E2E `S6::test_multi_contract_selection_*` (3 tests), `S6::test_earlier_expiration_with_higher_strike_is_selected_end_to_end`; pure `ST::test_earlier_expiration_beats_lower_strike`, `ST::test_strike_selection_and_tie_breaks`, `ST::test_expiration_window`, `ST::test_expiration_uses_new_york_date_not_utc` | Rules 5–6 interpretation needs owner confirmation (SPEC.md §13.20). The contract ID tie-break cannot be reached, because economic identity is unique; it is covered only by the code path |
+| 9 | Multiple qualifying contracts | Among in-scope contracts with 30–45 days to expiration and strike ≥ underlying: **earliest expiration, then lowest strike, then contract ID** (rule 6). Only quotes already replayed are used; no substitution when the selected contract has no current quote; out-of-window expiries skipped | As expected. An earlier expiration with a higher strike beats a later expiration with a lower strike (see the interpretation note below) | E2E `S6::test_multi_contract_selection_*` (3 tests), `S6::test_earlier_expiration_with_higher_strike_is_selected_end_to_end`; pure `ST::test_earlier_expiration_beats_lower_strike`, `ST::test_strike_selection_and_tie_breaks`, `ST::test_expiration_window`, `ST::test_expiration_uses_new_york_date_not_utc` | Rules 5–6 ordering confirmed by the owner (SPEC.md §13.20, resolved). The contract ID tie-break cannot be reached, because economic identity is unique; it is covered only by the code path |
 | 10 | Determinism | Identical event ordering and economics across databases and between step-by-step vs replay-to-end | As expected for the worked example and two stress fixtures | E2E `S6::test_identical_inputs_identical_results` (×2), `T::test_deterministic_trading_replay`, Step 4 `test_replay.py` | Record IDs and wall-clock audit timestamps differ by design |
 | 11 | Failed reconciliation | Every trading mutation blocked; pause and reads allowed | As expected | `R::*` (15 tests), `S6::test_pause_is_safe_on_unreconciled_running_run`, `S6::test_f1_*` | Replay-only runs have no trading books and are not guarded |
 
-### Interpretation note: entry rules 5 and 6 (needs owner confirmation)
+### Entry rules 5 and 6 (resolved: owner approved the implemented ordering)
 
 The Step 6 report first described the selection as "strike, then expiry". That
 was a **wording error in the report**; the code was not changed.
@@ -78,15 +78,16 @@ ordering. Example with SPY at $600.00:
 - A: Oct 30, $605 strike
 - B: Nov 6, $600 strike
 
-The code selects **A**. Expiration is the primary key; rule 5's "lowest strike"
+The code selects **A**, which is the approved behavior. Expiration is the primary key; rule 5's "lowest strike"
 applies within the chosen expiration.
 
 **The alternative.** A literal global reading of rule 5 ("the lowest eligible
 strike at or above the underlying", across all expirations) would select **B**,
 leaving only rule 6's expiration and ID keys to break ties among $600 strikes.
 
-This choice is recorded in SPEC.md §13.20 and pinned by tests, so any change is
-deliberate. Neither the worked example nor the bundled fixture is affected: it
+**Resolution.** The owner approved the implemented ordering (select A).
+SPEC.md Section 2 rules 5–6 were rewritten to state it, and §13.20 is marked
+resolved. The tests pin it, so any change is deliberate. Neither the worked example nor the bundled fixture is affected: it
 has one contract.
 
 **Reconciliation mark check (F1).** It compares a position with the latest

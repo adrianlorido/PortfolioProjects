@@ -74,8 +74,18 @@ Evaluate each valid sample quote while flat:
 2. Current underlying price must be at least 0.5% above the session reference price.
 3. Contract must be a standard, unadjusted call with a multiplier of 100.
 4. Expiration must be 30–45 calendar days away, measured using the simulated date in America/New_York.
-5. Strike must be the lowest eligible strike at or above the underlying price.
-6. If multiple contracts qualify, select earliest expiration, then lowest strike, then contract ID.
+5. Strike must be at or above the current underlying price. A contract that
+   meets rules 1–5 is *eligible*.
+6. Select exactly one eligible contract, in this order (owner decision,
+   §13.20):
+   1. the **earliest expiration** among eligible contracts;
+   2. within that expiration, the **lowest strike** at or above the
+      underlying price;
+   3. if still tied, the lowest contract ID.
+
+   Expiration takes precedence over strike. Example with SPY at $600.00 and two
+   eligible contracts, an Oct 30 $605 call and a Nov 6 $600 call: the
+   **Oct 30 $605 call** is selected.
 7. Bid must be positive; ask must be greater than or equal to bid.
 8. Spread must be no more than 5% of ask.
 9. Quote and underlying observation must each be no more than 2 simulated seconds old.
@@ -752,18 +762,14 @@ silent or ambiguous; items 1–4 are flagged for review.
       a 5xx response, as it already did after a network error, so a response
       lost after commit is not repeated as a new command.
     - F3: the latest-quote display lists contracts most recent first.
-20. **Entry rules 5 and 6 interaction (flagged for owner confirmation).**
-    - **Implemented reading.** A contract qualifies when it is in scope, 30–45
-      days to expiration, and has strike ≥ underlying. Rule 6 orders the
-      qualifying contracts: earliest expiration, then lowest strike, then
-      contract ID. So "lowest strike" (rule 5) is applied within the earliest
-      expiration. With SPY at $600, an Oct 30 $605 call is selected over a
-      Nov 6 $600 call.
-    - **Alternative reading.** Applied globally, rule 5 would first fix the
-      strike at the lowest eligible strike across all expirations ($600), then
-      use rule 6 only among $600 strikes; the Nov 6 $600 call would be
-      selected.
-    - No code was changed. The implemented reading is pinned by
-      `test_strategy.py::test_earlier_expiration_beats_lower_strike` and
-      `test_step6_stress.py::test_earlier_expiration_with_higher_strike_is_selected_end_to_end`.
-      The bundled worked example has a single contract and is unaffected.
+20. **Entry rules 5 and 6 interaction: RESOLVED (owner decision after Step 6).**
+    The approved ordering is: earliest eligible expiration first, then the
+    lowest eligible strike at or above the underlying within that expiration,
+    then contract ID. With SPY at $600, the Oct 30 $605 call is selected over
+    the Nov 6 $600 call. Section 2 rules 5 and 6 now state this directly. The
+    rejected alternative was a global lowest strike across all expirations
+    first.
+    - The implementation (`select_entry_contract`, which sorts by expiration,
+      strike, contract ID) already matched and was not changed.
+    - Pinned by `test_strategy.py::test_earlier_expiration_beats_lower_strike`
+      and `test_step6_stress.py::test_earlier_expiration_with_higher_strike_is_selected_end_to_end`.

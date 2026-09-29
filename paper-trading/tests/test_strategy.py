@@ -98,7 +98,7 @@ def test_strike_selection_and_tie_breaks():
 
 
 def test_earlier_expiration_beats_lower_strike():
-    """Rule 6 ordering is expiration first. SPEC.md §13.20 records this interpretation of rules 5-6."""
+    """Rule 6 ordering is expiration first (owner-approved, SPEC.md §13.20)."""
     a = C(contract_id="A_OCT30_605", expiration="2026-10-30", strike=60500)   # earlier expiry, higher strike
     b = C(contract_id="B_NOV06_600", expiration="2026-11-06", strike=60000)   # later expiry, lowest strike
     c = C(contract_id="C_OCT30_610", expiration="2026-10-30", strike=61000)   # same expiry as A, higher strike
