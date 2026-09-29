@@ -1,7 +1,13 @@
-"""Sample-data replay: fixture loading and replay commands (Step 4).
+"""Replay: dataset loading and replay commands (Step 4; incremental since FA-1a).
 
-Commands: ``load_fixture``, ``step``, ``pause``, ``resume``, ``run_to_end``, and for
-trading runs ``start_trading``, ``request_close``, ``cancel_order``.
+Commands: ``load_fixture``, ``attach_dataset``, ``step``, ``pause``, ``resume``,
+``run_to_end``, and for trading runs ``start_trading``, ``request_close``,
+``cancel_order``.
+
+- Incremental (FA-1a): a run replays a stored dataset (``market_data.datasets``).
+  The dataset is verified in full once per process; each step then reads one
+  event by primary key and checks source sequences through the unique index,
+  so the cost of a step does not grow with the number of events replayed.
 
 - Serialized: every state change runs inside ``BEGIN IMMEDIATE``, which holds
   SQLite's single write lock, so commands from any thread or process apply
@@ -30,15 +36,16 @@ import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Callable, Optional
 
 from paper_trading.app.coordinator import IdempotencyConflictError, new_id, utc_now
 from paper_trading.app import trading
 from paper_trading.app.events import append_run_event
 from paper_trading.accounting.ledger import reconcile
-from paper_trading.contracts.models import MarketQuote
+from paper_trading.contracts.models import MODE_DATA_CLASS, MarketQuote
 from paper_trading.contracts.types import SCHEMA_VERSION, parse_utc
+from paper_trading.market_data import datasets
+from paper_trading.market_data.datasets import DatasetHeader
 from paper_trading.market_data.fixtures import (
     FixtureDocument,
     FixtureValidationError,
@@ -81,21 +88,48 @@ class LoadResult:
 # --- helpers ---------------------------------------------------------------
 
 
-@lru_cache(maxsize=16)
-def _parse_stored(content_json: str) -> FixtureDocument:
-    # Stored content is re-verified (checksum, structure, scope) before use.
-    return parse_fixture(content_json)
+# Verified dataset headers, per process. The name predates FA-1a; tests clear it
+# with ``_parse_stored.cache_clear()`` to simulate a process restart.
+_parse_stored = datasets.VERIFIED
 
 
-def stored_fixture(conn: sqlite3.Connection, run_id: str) -> tuple[sqlite3.Row, FixtureDocument]:
+def stored_fixture(conn: sqlite3.Connection, run_id: str) -> tuple[sqlite3.Row, DatasetHeader]:
+    """The run's replay state and its verified dataset header (not the events)."""
     state = conn.execute("SELECT * FROM replay_state WHERE run_id = ?", (run_id,)).fetchone()
     if state is None:
         raise ReplayNotLoadedError("no fixture is loaded for this run; run: python -m paper_trading load-fixture")
-    row = conn.execute(
-        "SELECT content_json FROM fixtures WHERE fixture_id = ? AND fixture_version = ?",
-        (state["fixture_id"], state["fixture_version"]),
-    ).fetchone()
-    return state, _parse_stored(row["content_json"])
+    header = _parse_stored.get(conn, state["fixture_id"], state["fixture_version"])
+    pinned = conn.execute("SELECT fixture_checksum FROM runs WHERE run_id = ?", (run_id,)).fetchone()[0]
+    if pinned != header.checksum:
+        raise FixtureValidationError(
+            f"checksum mismatch: run is pinned to {pinned!r} but its dataset is {header.checksum!r}")
+    return state, header
+
+
+stored_dataset = stored_fixture
+
+
+class _AcceptedSequences:
+    """Index-backed view of the source sequences already ACCEPTED for a run and source.
+
+    Uses the UNIQUE (run_id, source, source_sequence) index, so both the duplicate
+    check and the highest accepted sequence are O(log n) instead of a full scan.
+    """
+
+    def __init__(self, conn: sqlite3.Connection, run_id: str, source: str):
+        self._conn, self._run_id, self._source = conn, run_id, source
+
+    def __contains__(self, seq: object) -> bool:
+        if not isinstance(seq, int) or isinstance(seq, bool):
+            return False
+        return self._conn.execute(
+            "SELECT 1 FROM market_quotes WHERE run_id = ? AND source = ? AND source_sequence = ?",
+            (self._run_id, self._source, seq)).fetchone() is not None
+
+    def highest(self) -> Optional[int]:
+        return self._conn.execute(
+            "SELECT MAX(source_sequence) FROM market_quotes WHERE run_id = ? AND source = ?",
+            (self._run_id, self._source)).fetchone()[0]
 
 
 def _payload_hash(command_type: str, run_id: str, payload: dict) -> str:
@@ -146,8 +180,98 @@ def _command(conn: sqlite3.Connection, key: str, command_type: str, run_id: str,
 # --- load ------------------------------------------------------------------
 
 
+def _bind_dataset(conn: sqlite3.Connection, run: sqlite3.Row, header: DatasetHeader, now: str) -> LoadResult:
+    """Pin a stored dataset to a READY run and open replay. Caller holds the transaction."""
+    run_id = run["run_id"]
+    for c in header.contracts:
+        existing = conn.execute(
+            "SELECT * FROM option_contracts WHERE contract_id = ?", (c.contract_id,)
+        ).fetchone()
+        values = c.model_dump()
+        if existing is not None:
+            stored_values = {k: existing[k] for k in values}
+            stored_values["adjusted"] = bool(stored_values["adjusted"])
+            if stored_values != values:
+                raise FixtureConflictError(
+                    f"contract {c.contract_id} already exists with different terms; contract IDs are immutable"
+                )
+            continue
+        try:
+            conn.execute(
+                """INSERT INTO option_contracts (contract_id, schema_version, underlying, expiration_date,
+                       option_type, strike_cents, currency, multiplier, deliverable, exercise_style,
+                       settlement_type, adjusted) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (c.contract_id, c.schema_version, c.underlying, c.expiration_date, c.option_type,
+                 c.strike_cents, c.currency, c.multiplier, c.deliverable, c.exercise_style,
+                 c.settlement_type, int(c.adjusted)),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise FixtureConflictError(
+                f"contract {c.contract_id} duplicates the economic identity of an existing contract"
+            ) from exc
+
+    conn.execute(
+        """UPDATE runs SET fixture_id = ?, fixture_version = ?, fixture_checksum = ?,
+               session_reference_cents = ? WHERE run_id = ?""",
+        (header.dataset_id, header.dataset_version, header.checksum, header.session_reference_cents, run_id),
+    )
+    conn.execute(
+        """INSERT INTO replay_state (run_id, fixture_id, fixture_version, status, next_position,
+               total_events, loaded_at, updated_at) VALUES (?,?,?,?,?,?,?,?)""",
+        (run_id, header.dataset_id, header.dataset_version, "ACTIVE", 1, header.event_count, now, now),
+    )
+    append_run_event(conn, run_id, "FIXTURE_LOADED", run["simulated_clock"], {
+        "fixture_id": header.dataset_id,
+        "fixture_version": header.dataset_version,
+        "checksum": header.checksum,
+        "total_events": header.event_count,
+        "session_reference_cents": header.session_reference_cents,
+        "data_class": header.data_class,
+        "source": header.source,
+    })
+    return LoadResult(header.dataset_id, header.dataset_version, header.checksum, header.event_count, True)
+
+
+def _check_run_accepts(conn: sqlite3.Connection, run: sqlite3.Row, *, data_class: str, session_timezone: str,
+                       session_start: str, session_end: str, underlying: str) -> None:
+    expected = MODE_DATA_CLASS[run["mode"]]
+    if data_class != expected:
+        raise FixtureConflictError(
+            f"dataset data class {data_class} cannot be replayed by a {run['mode']} run "
+            f"(which replays {expected} data); create a run of the matching mode"
+        )
+    mismatches = [
+        name for name, run_value, value in (
+            ("session_timezone", run["session_timezone"], session_timezone),
+            ("session_start", run["session_start"], session_start),
+            ("session_end", run["session_end"], session_end),
+        ) if run_value != value
+    ]
+    if mismatches:
+        raise FixtureConflictError(
+            f"fixture session does not match the run's pinned session ({', '.join(mismatches)}); "
+            "create a run configured with the fixture's session"
+        )
+    watchlist = {r[0] for r in conn.execute("SELECT symbol FROM watchlist_items WHERE run_id = ?", (run["run_id"],))}
+    if underlying not in watchlist:
+        raise FixtureConflictError(f"fixture underlying {underlying} is not on the run's watchlist")
+
+
+def _pinned_elsewhere(run: sqlite3.Row, checksum: str) -> bool:
+    """True if the run already has this dataset (no-op); raise if it has a different one."""
+    if run["fixture_checksum"] is None:
+        return False
+    if run["fixture_checksum"] == checksum:
+        return True
+    raise FixtureConflictError(
+        f"run {run['run_id']} is pinned to fixture {run['fixture_id']} {run['fixture_version']} "
+        f"({run['fixture_checksum']}); a different fixture requires a new run "
+        "(set PAPER_SAMPLE_RUN_KEY to a new value and run init-sample)"
+    )
+
+
 def load_fixture(conn: sqlite3.Connection, run_id: str, doc: FixtureDocument, content_json: str) -> LoadResult:
-    """Validate the fixture against the run, store it, pin it, and open replay."""
+    """Validate a synthetic fixture against the run, store it as a dataset, pin it, and open replay."""
     if parse_fixture(content_json).checksum != doc.checksum:
         raise FixtureValidationError("fixture content does not match the parsed document")
 
@@ -155,32 +279,11 @@ def load_fixture(conn: sqlite3.Connection, run_id: str, doc: FixtureDocument, co
         run = conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
         if run is None:
             raise ReplayNotLoadedError(f"unknown run {run_id}")
-        result = LoadResult(doc.fixture_id, doc.fixture_version, doc.checksum, len(doc.events), False)
-
-        if run["fixture_checksum"] is not None:
-            if run["fixture_checksum"] == doc.checksum:
-                return result  # same fixture again: no-op
-            raise FixtureConflictError(
-                f"run {run_id} is pinned to fixture {run['fixture_id']} {run['fixture_version']} "
-                f"({run['fixture_checksum']}); a different fixture requires a new run "
-                "(set PAPER_SAMPLE_RUN_KEY to a new value and run init-sample)"
-            )
-
-        mismatches = [
-            name for name, run_value, fixture_value in (
-                ("session_timezone", run["session_timezone"], doc.session.timezone),
-                ("session_start", run["session_start"], doc.session.start),
-                ("session_end", run["session_end"], doc.session.end),
-            ) if run_value != fixture_value
-        ]
-        if mismatches:
-            raise FixtureConflictError(
-                f"fixture session does not match the run's pinned session ({', '.join(mismatches)}); "
-                "create a run configured with the fixture's session"
-            )
-        watchlist = {r[0] for r in conn.execute("SELECT symbol FROM watchlist_items WHERE run_id = ?", (run_id,))}
-        if doc.underlying not in watchlist:
-            raise FixtureConflictError(f"fixture underlying {doc.underlying} is not on the run's watchlist")
+        if _pinned_elsewhere(run, doc.checksum):
+            return LoadResult(doc.fixture_id, doc.fixture_version, doc.checksum, len(doc.events), False)
+        _check_run_accepts(conn, run, data_class="SYNTHETIC", session_timezone=doc.session.timezone,
+                           session_start=doc.session.start, session_end=doc.session.end,
+                           underlying=doc.underlying)
 
         stored = conn.execute(
             "SELECT checksum FROM fixtures WHERE fixture_id = ? AND fixture_version = ?",
@@ -201,52 +304,34 @@ def load_fixture(conn: sqlite3.Connection, run_id: str, doc: FixtureDocument, co
                  doc.session.timezone, doc.session.start, doc.session.end, doc.session_reference_cents,
                  len(doc.events), content_json, now),
             )
+        try:
+            datasets.store_fixture_dataset(conn, doc, now)
+        except datasets.DatasetConflictError as exc:
+            raise FixtureConflictError(str(exc)) from exc
+        header = _parse_stored.get(conn, doc.fixture_id, doc.fixture_version)
+        return _bind_dataset(conn, run, header, now)
 
-        for c in doc.contracts:
-            existing = conn.execute(
-                "SELECT * FROM option_contracts WHERE contract_id = ?", (c.contract_id,)
-            ).fetchone()
-            values = c.model_dump()
-            if existing is not None:
-                stored_values = {k: existing[k] for k in values}
-                stored_values["adjusted"] = bool(stored_values["adjusted"])
-                if stored_values != values:
-                    raise FixtureConflictError(
-                        f"contract {c.contract_id} already exists with different terms; contract IDs are immutable"
-                    )
-                continue
-            try:
-                conn.execute(
-                    """INSERT INTO option_contracts (contract_id, schema_version, underlying, expiration_date,
-                           option_type, strike_cents, currency, multiplier, deliverable, exercise_style,
-                           settlement_type, adjusted) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (c.contract_id, c.schema_version, c.underlying, c.expiration_date, c.option_type,
-                     c.strike_cents, c.currency, c.multiplier, c.deliverable, c.exercise_style,
-                     c.settlement_type, int(c.adjusted)),
-                )
-            except sqlite3.IntegrityError as exc:
-                raise FixtureConflictError(
-                    f"contract {c.contract_id} duplicates the economic identity of an existing contract"
-                ) from exc
 
-        conn.execute(
-            """UPDATE runs SET fixture_id = ?, fixture_version = ?, fixture_checksum = ?,
-                   session_reference_cents = ? WHERE run_id = ?""",
-            (doc.fixture_id, doc.fixture_version, doc.checksum, doc.session_reference_cents, run_id),
-        )
-        conn.execute(
-            """INSERT INTO replay_state (run_id, fixture_id, fixture_version, status, next_position,
-                   total_events, loaded_at, updated_at) VALUES (?,?,?,?,?,?,?,?)""",
-            (run_id, doc.fixture_id, doc.fixture_version, "ACTIVE", 1, len(doc.events), now, now),
-        )
-        append_run_event(conn, run_id, "FIXTURE_LOADED", run["simulated_clock"], {
-            "fixture_id": doc.fixture_id,
-            "fixture_version": doc.fixture_version,
-            "checksum": doc.checksum,
-            "total_events": len(doc.events),
-            "session_reference_cents": doc.session_reference_cents,
-        })
-        return LoadResult(doc.fixture_id, doc.fixture_version, doc.checksum, len(doc.events), True)
+def attach_dataset(conn: sqlite3.Connection, run_id: str, dataset_id: str, dataset_version: str) -> LoadResult:
+    """Pin an already stored dataset (``datasets.store_dataset``) to a READY run and open replay.
+
+    The dataset's data class must match the run mode (SYNTHETIC for
+    SAMPLE_PAPER, HISTORICAL for HISTORICAL_PAPER); the database enforces this too.
+    """
+    with transaction(conn):
+        run = conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+        if run is None:
+            raise ReplayNotLoadedError(f"unknown run {run_id}")
+        try:
+            header = _parse_stored.get(conn, dataset_id, dataset_version)
+        except datasets.DatasetNotFoundError as exc:
+            raise ReplayNotLoadedError(str(exc)) from exc
+        if _pinned_elsewhere(run, header.checksum):
+            return LoadResult(header.dataset_id, header.dataset_version, header.checksum, header.event_count, False)
+        _check_run_accepts(conn, run, data_class=header.data_class, session_timezone=header.session_timezone,
+                           session_start=header.session_start, session_end=header.session_end,
+                           underlying=header.underlying)
+        return _bind_dataset(conn, run, header, utc_now())
 
 
 # --- step ------------------------------------------------------------------
@@ -254,14 +339,14 @@ def load_fixture(conn: sqlite3.Connection, run_id: str, doc: FixtureDocument, co
 
 def _step_in_transaction(conn: sqlite3.Connection, run_id: str) -> dict:
     """Process the next fixture event. Caller holds the write transaction."""
-    state, doc = stored_fixture(conn, run_id)
+    state, header = stored_fixture(conn, run_id)
     if state["status"] == "EXHAUSTED":
         raise ReplayExhaustedError("replay has already reached the end of the fixture")
     if state["status"] == "PAUSED":
         raise ReplayPausedError("replay is paused; resume it before stepping")
 
     position = state["next_position"]
-    event = doc.events[position - 1]
+    event = datasets.read_event(conn, header.dataset_id, header.dataset_version, position)
     run = conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
     is_trading = bool(run["trading_enabled"])
     if is_trading and run["status"] != "RUNNING":
@@ -289,18 +374,16 @@ def _step_in_transaction(conn: sqlite3.Connection, run_id: str) -> dict:
         outcome = "BOUNDARY"
     else:
         raw = event.input
-        source = doc.source
-        accepted = frozenset(r[0] for r in conn.execute(
-            "SELECT source_sequence FROM market_quotes WHERE run_id = ? AND source = ?", (run_id, source)
-        ))
+        source = header.source
         ctx = IntakeContext(
             clock=parse_utc(clock),
             session_start=parse_utc(run["session_start"]),
             session_end=parse_utc(run["session_end"]),
             source=source,
-            contract_ids=frozenset(c.contract_id for c in doc.contracts),
+            contract_ids=header.contract_ids,
             session_reference_cents=run["session_reference_cents"],
-            accepted_sequences=accepted,
+            accepted_sequences=_AcceptedSequences(conn, run_id, source),
+            expected_is_sample=bool(run["is_sample"]),
         )
         verdict = validate_quote_input(raw, ctx)
         if verdict.accepted:
@@ -320,11 +403,14 @@ def _step_in_transaction(conn: sqlite3.Connection, run_id: str) -> dict:
                        is_sample, source_sequence, observed_at, received_at, bid_cents, ask_cents, bid_size,
                        ask_size, underlying_price_cents, underlying_observed_at, session_reference_cents)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (quote.quote_id, quote.schema_version, run_id, seq, quote.contract_id, quote.source, 1,
-                 quote.source_sequence, quote.observed_at, quote.received_at, quote.bid_cents, quote.ask_cents,
-                 quote.bid_size, quote.ask_size, quote.underlying_price_cents, quote.underlying_observed_at,
-                 quote.session_reference_cents),
+                (quote.quote_id, quote.schema_version, run_id, seq, quote.contract_id, quote.source,
+                 int(quote.is_sample), quote.source_sequence, quote.observed_at, quote.received_at, quote.bid_cents,
+                 quote.ask_cents, quote.bid_size, quote.ask_size, quote.underlying_price_cents,
+                 quote.underlying_observed_at, quote.session_reference_cents),
             )
+            if quote.snapshot_at is not None or quote.ingested_at is not None:
+                conn.execute("INSERT INTO quote_provenance (quote_id, snapshot_at, ingested_at) VALUES (?,?,?)",
+                             (quote.quote_id, quote.snapshot_at, quote.ingested_at))
             outcome = "ACCEPTED"
             result["quote_id"] = quote.quote_id
             if is_trading:

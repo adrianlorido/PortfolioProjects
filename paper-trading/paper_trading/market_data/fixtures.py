@@ -38,7 +38,7 @@ MIN_DAYS_BEFORE_EXPIRATION = 7  # SPEC.md Section 4
 
 
 class FixtureValidationError(ValueError):
-    """The fixture document is malformed, fails its checksum, or is out of scope."""
+    """The fixture or dataset is malformed, fails its checksum, or is out of scope."""
 
 
 class FixtureModel(BaseModel):
@@ -126,12 +126,17 @@ def compute_checksum(document: dict) -> str:
 def validate_contract_scope(doc: FixtureDocument) -> None:
     """MVP scope (SPEC.md Section 4): standard, unadjusted SPY calls, x100,
     expiring at least seven days after the session's local date."""
-    session_date = parse_utc(doc.session.start).astimezone(ZoneInfo(doc.session.timezone)).date()
+    check_contract_scope(doc.contracts, doc.underlying, doc.session.start, doc.session.timezone)
+
+
+def check_contract_scope(contracts, underlying: str, session_start: str, session_timezone: str) -> None:
+    """Contract scope check shared by fixtures and event-stream datasets."""
+    session_date = parse_utc(session_start).astimezone(ZoneInfo(session_timezone)).date()
     problems = []
-    for c in doc.contracts:
+    for c in contracts:
         where = f"contract {c.contract_id}"
-        if c.underlying != doc.underlying:
-            problems.append(f"{where}: underlying {c.underlying} is not the fixture underlying {doc.underlying}")
+        if c.underlying != underlying:
+            problems.append(f"{where}: underlying {c.underlying} is not the fixture underlying {underlying}")
         if c.option_type != "CALL":
             problems.append(f"{where}: only CALL contracts are supported")
         if c.adjusted:

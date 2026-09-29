@@ -773,3 +773,94 @@ silent or ambiguous; items 1–4 are flagged for review.
       strike, contract ID) already matched and was not changed.
     - Pinned by `test_strategy.py::test_earlier_expiration_beats_lower_strike`
       and `test_step6_stress.py::test_earlier_expiration_with_higher_strike_is_selected_end_to_end`.
+
+## 14. FA-1a engine readiness (owner-approved decisions and implementation)
+
+Owner decisions are in `docs/HISTORICAL_DATA_PLAN.md` (decisions 1–7). This
+section records how FA-1a implements them. **No trading, risk, execution, or
+accounting rule changed.** Every Step 7 test passes unmodified, and the worked
+example still ends at $100,078.70.
+
+1. **Data classes and run modes (decision 2).**
+   - A run's `mode` is `SAMPLE_PAPER` (replays `SYNTHETIC` data,
+     `is_sample = 1`) or `HISTORICAL_PAPER` (replays `HISTORICAL` data,
+     `is_sample = 0`). The mode is fixed at creation and enforced by the
+     database: a CHECK ties `is_sample` to `mode`, and triggers fix it for the
+     life of the run.
+   - A run can only bind a dataset of its own class, and every accepted
+     quote's `is_sample` must equal its run's. Both are enforced by the
+     application and by database triggers.
+   - Both classes can coexist in one database. The CLI creates only
+     `SAMPLE_PAPER` runs; `HISTORICAL_PAPER` exists for FA-1b.
+   - The dashboard banner follows the mode: **SAMPLE DATA — PAPER ONLY** or
+     **HISTORICAL DATA — PAPER ONLY**, with a data-class pill and the
+     dataset's provenance (a generator for synthetic data; vendor, importer,
+     and retrieval time for historical data).
+2. **Datasets (incremental storage).**
+   - A run replays a stored dataset, made of three immutable tables:
+     `dataset_events` (one row per event), `datasets` (a sealed header), and
+     `dataset_manifests` (provenance).
+   - Fixtures still load exactly as before and are also stored as
+     `SYNTHETIC` datasets (checksum scheme `fixture_document_v1`: the
+     fixture's own checksum).
+   - Event-stream datasets (`event_stream_v1`) are stored from any iterable,
+     in batches, in one transaction.
+   - A dataset is verified in full (events digest, header, manifest, and for
+     fixtures the stored document) the first time a process uses it. Each
+     step then reads one event by primary key.
+   - The `fixture_*` columns of `runs` and `replay_state` identify the bound
+     dataset.
+3. **Manifests.**
+   - A `SYNTHETIC` manifest must name its generator. It must not carry
+     real-observation fields (`vendor`, `vendor_dataset`, `raw_files`,
+     `retrieved_at`, `license_reference`, `importer`). Its label must say
+     SYNTHETIC and must not say HISTORICAL, and its source must be a
+     registered synthetic source.
+   - A `HISTORICAL` manifest must name an **approved** importer, the vendor,
+     the vendor dataset, raw files with SHA-256 digests, the retrieval time,
+     a license reference, the calendar, transformation rules, time semantics,
+     price conversion, and coverage. Its label must say HISTORICAL.
+   - `APPROVED_HISTORICAL_IMPORTERS` is empty, so **no historical dataset can
+     be stored until FA-1b**. The database CHECKs repeat the label, source,
+     and field rules.
+4. **Time semantics (decision 4).**
+   - Quote inputs may carry optional `snapshot_at` (vendor snapshot as-of
+     time) and `ingested_at` (vendor or importer recording time). They are
+     stored in `quote_provenance`.
+   - Freshness uses only `observed_at`; the 2 s rule is unchanged.
+   - New intake reasons:
+     - `INCONSISTENT_PROVENANCE_TIME`: a snapshot or ingestion time earlier
+       than the observation;
+     - `FUTURE_SNAPSHOT`: a snapshot after the simulated clock;
+     - `DATA_CLASS_MISMATCH`: `is_sample: true` in a historical run.
+     `NOT_SAMPLE_DATA` is unchanged for synthetic runs.
+   - A fresh snapshot around a stale observation is still `STALE_QUOTE`.
+5. **Price precision (decision 5).** Unchanged: integer cents, and
+   non-integers are rejected. Fractional-cent SPY midpoints are an open FA-1b
+   decision (see the plan); nothing is rounded.
+6. **Exchange calendar (decision 6).**
+   - `market_data/calendar.py` defines the versioned calendar
+     `xnys_2023_2026_v1`, with holidays (including the 2025-01-09 closure) and
+     13:00 early closes.
+   - A dataset that names a calendar must use exactly the scheduled session.
+     Historical datasets must name one.
+   - `coverage_report` describes gaps and never changes session boundaries.
+7. **Diagnostic vs evaluation dates (decision 7).** `calendar.trading_days`
+   lists every scheduled day in a range, giving a date set chosen
+   independently of outcomes. Selecting dates or contracts remains FA-1b/FA-2
+   work.
+8. **Performance without weaker checks.**
+   - Source-sequence checks use the UNIQUE index (duplicate check and highest
+     accepted value). The latest quote per contract is one descending index
+     probe. Replay-event and run-event pages use key ranges.
+   - Reconciliation still runs before and after every event and on every
+     trading command, unchanged.
+   - List endpoints take `limit` (1–5000, default 500) and `offset`, and
+     return `X-Total-Count`. The dashboard shows the latest 50 rows of each
+     growing list.
+9. **Migration 0004** is a Python migration: SQLite's create-copy-drop-rename
+   table rebuild, run with foreign keys off, with `foreign_key_check`
+   required empty before commit. It preserves every row, index, and trigger
+   (recreated from their original text). Stored fixtures are backfilled as
+   datasets. A failure rolls back completely and restores foreign-key
+   enforcement.

@@ -24,6 +24,9 @@ is not a tested or profitable trading strategy.**
   **database backup/restore**, limitations, troubleshooting.
 - [`docs/FUTURE_ASSIGNMENTS.md`](docs/FUTURE_ASSIGNMENTS.md): scoped next work
   packages (market data, evaluation, dashboard) and deferred items.
+- [`docs/HISTORICAL_DATA_PLAN.md`](docs/HISTORICAL_DATA_PLAN.md): historical
+  data plan, owner decisions, FA-1a results (benchmarks), and the decisions
+  still needed before a vendor importer (FA-1b).
 - [`STEP6_VALIDATION.md`](STEP6_VALIDATION.md): verification matrix and
   evidence.
 
@@ -35,7 +38,12 @@ is not a tested or profitable trading strategy.**
   position → closing trade → P&L.
 - **Step 6 — verification:** stress and end-to-end tests, fixes F1–F3, entry
   rules 5–6 resolved.
-- **Step 7 — handoff:** documentation only (this version).
+- **Step 7 — handoff:** documentation only.
+- **FA-1a — historical-data engine readiness (this version):** stored
+  datasets replayed one event at a time (linear time), SYNTHETIC vs
+  HISTORICAL data classes with separate banners, immutable manifests, a
+  versioned exchange calendar, paged API/dashboard reads, migration 0004.
+  **No historical data or vendor importer yet** (FA-1b).
 
 ## Requirements
 
@@ -76,12 +84,14 @@ Linux, and Windows PowerShell once the virtualenv is active.
 
 ### Upgrading an existing database
 
-Databases created by Step 3 or Step 4 must be migrated once. Migrations only
-add tables, columns, and guards; existing runs and replay results are kept,
-and those runs remain **replay-only**:
+Databases created by earlier steps must be migrated once. Existing runs,
+replay results, and trades are kept; runs created before Step 5 remain
+**replay-only**. Migration 0004 (FA-1a) rebuilds three tables in one
+transaction to widen their data-class checks, and converts stored fixtures to
+datasets; **back up the database first** (see `docs/HANDOFF.md`):
 
 ```bash
-python -m paper_trading migrate       # e.g. "Applied migrations: [3]"
+python -m paper_trading migrate       # e.g. "Applied migrations: [4]"
 python -m paper_trading status        # same run, same results, PASS
 ```
 
@@ -186,8 +196,8 @@ selects the run (default `PAPER_SAMPLE_RUN_KEY`, i.e. `sample-run-001`).
 | `request-close [--key K]` | Trading runs: manual exit of the open position. |
 | `cancel ORDER_ID [--key K]` | Trading runs: cancel an OPEN order and release its reservation. |
 | `status` | Run, account (cash, reserved, available, equity, realized/unrealized, fees), replay, reconciliation. |
-| `trades` | Proposals → risk decisions → orders, fills, positions, closed trades, ledger. |
-| `replay-status` | Replay progress, latest quote and freshness, every event and outcome. |
+| `trades [--limit N]` | Proposals → risk decisions → orders, fills, positions, closed trades, ledger (latest 50 proposals/fills by default; `--limit 0` = all). |
+| `replay-status [--limit N]` | Replay progress, data class and source, latest quote and freshness, the latest 50 events and outcomes (`--limit 0` = all). |
 | `serve` | Dashboard and API on http://127.0.0.1:8000/. Never creates or migrates a database. |
 | `fixture-checksum FILE` | Prints the checksum a fixture should declare. |
 
@@ -201,7 +211,7 @@ is refused. Without `--key`, each invocation is a new command.
 python -m pytest            # macOS / Linux / PowerShell alike
 ```
 
-The suite has 324 tests and runs in about 20 seconds. It uses temporary
+The suite has 426 tests and runs in about a minute. It uses temporary
 databases and never touches `data/`.
 
 | Area | File |
@@ -213,6 +223,17 @@ databases and never touches `data/`.
 | Step 6 stress and end-to-end verification (price gaps, expiries and releases, freshness boundaries, concurrent commands on separate connections, restart in each open state, failures before and after commit, session end with an open closing order, multi-contract selection, determinism), with an independent books check after every event. See [`STEP6_VALIDATION.md`](STEP6_VALIDATION.md). | `tests/test_step6_stress.py` |
 | The CLI demo across real process and server restarts; Step 3 → current database upgrade | `tests/test_restart.py` |
 | Step 3 and Step 4 behavior (models, init, schema, API, fixtures, intake, replay, replay API) | `tests/test_models.py`, `test_init.py`, `test_schema.py`, `test_api.py`, `test_fixtures.py`, `test_intake.py`, `test_replay.py`, `test_replay_api.py` |
+| FA-1a datasets: event-stream path reproduces the worked example; streaming, idempotent, versioned storage; honest manifests, labels, and sources (app and database); historical data refused until an importer is approved; run mode ↔ data class; tamper detection | `tests/test_datasets.py` |
+| FA-1a provenance times (a fresh snapshot never refreshes a stale quote), data class at intake, index-backed sequences equal set semantics | `tests/test_provenance_times.py` |
+| FA-1a calendar (holidays, early closes, 2025-01-09 closure, DST) and coverage | `tests/test_calendar.py` |
+| FA-1a paging, bounded dashboard, SAMPLE vs HISTORICAL banners | `tests/test_bounded_views.py` |
+| FA-1a hot queries use indexes; SQLite work per event does not grow with replay length | `tests/test_scaling.py` |
+| FA-1a restart and retry on 5,000 quotes match an uninterrupted run | `tests/test_large_restart.py` |
+| FA-1a upgrade of a real Step 7 database (every row, trigger, and result preserved; partial run resumes to $100,078.70; failed upgrade leaves it untouched) | `tests/test_upgrade_step7.py` |
+
+**Benchmark** (not part of the suite): `python tools/bench_replay.py`
+(`--stream` stores an event-stream dataset from a generator; `--profile`
+prints the hottest functions). Results are in `docs/HISTORICAL_DATA_PLAN.md`.
 
 Every trading scenario reconciles the books after every event.
 
@@ -293,15 +314,24 @@ recorded in SPEC.md §13.
 - **Quote validation reasons:**
   - shape: `UNKNOWN_FIELD`, `MISSING_FIELD`, `MISSING_SIZE`, `INVALID_TYPE`,
     `INVALID_TIMESTAMP`, `NEGATIVE_VALUE`, `NONPOSITIVE_PRICE`;
-  - semantics: `SOURCE_MISMATCH`, `NOT_SAMPLE_DATA`, `UNKNOWN_CONTRACT`,
-    `CROSSED_QUOTE`, `FUTURE_OBSERVATION`, `STALE_QUOTE`,
-    `FUTURE_UNDERLYING_OBSERVATION`, `STALE_UNDERLYING`, `OUTSIDE_SESSION`,
+  - semantics: `SOURCE_MISMATCH`, `NOT_SAMPLE_DATA`, `DATA_CLASS_MISMATCH`,
+    `UNKNOWN_CONTRACT`, `CROSSED_QUOTE`, `FUTURE_OBSERVATION`, `STALE_QUOTE`,
+    `FUTURE_UNDERLYING_OBSERVATION`, `STALE_UNDERLYING`,
+    `INCONSISTENT_PROVENANCE_TIME`, `FUTURE_SNAPSHOT`, `OUTSIDE_SESSION`,
     `REFERENCE_PRICE_MISMATCH`, `DUPLICATE_SEQUENCE`,
     `OUT_OF_ORDER_SEQUENCE`.
+- **Provenance times (FA-1a).** Optional `snapshot_at` and `ingested_at` are
+  stored beside the quote. Freshness always uses `observed_at`.
 - **Source-sequence rule** (accepted quotes only). With H the highest accepted
   sequence: an already-accepted value is a duplicate; a value below H is out
   of order; a value above H is fine and gaps are allowed. Rejected inputs
   never advance H.
+- **Datasets (FA-1a).** Loading a fixture also stores it as an immutable
+  `SYNTHETIC` dataset. Replay verifies a dataset in full once per process,
+  then reads one event per step by primary key, so the cost per event does not
+  grow with the replay's length. Event-stream datasets can be stored from any
+  iterable with `market_data.datasets.store_dataset` and bound with
+  `replay.attach_dataset` (Python API only).
 - **Fixtures.** `fixtures/sample_spy_worked_trade_v1.json` is bundled.
   `tests/fixtures/test_invalid_inputs_v1.json` is test only. Checksum =
   `sha256:` + SHA-256 of canonical JSON without the `checksum` key. After
@@ -313,11 +343,12 @@ Every endpoint accepts `?run=<run key>` (default `PAPER_SAMPLE_RUN_KEY`).
 
 | Endpoint | Returns |
 |---|---|
-| `GET /health` | Status, mode, schema version |
-| `GET /api/runs` | All runs with kind and status |
+| `GET /health` | Status, the default run's mode, schema version |
+| `GET /api/runs` | Runs with kind, mode, and status (`?limit=`, most recent) |
 | `GET /api/run`, `/api/account`, `/api/watchlist` | Run record, account snapshot + reconciliation, watchlist |
 | `GET /api/proposals`, `/api/risk-decisions`, `/api/orders`, `/api/fills`, `/api/positions`, `/api/closed-trades`, `/api/exit-intents`, `/api/ledger` | Trading records |
-| `GET /api/replay`, `/api/replay/events`, `/api/quotes`, `/api/rejected-inputs`, `/api/market` | Replay state and market data |
+| `GET /api/replay`, `/api/replay/events`, `/api/quotes`, `/api/rejected-inputs`, `/api/market` | Replay state (with data class and provenance) and market data |
+| `GET /api/run-events` | The run's audit events |
 | `POST /api/replay/load` | `{"fixture_id": ...}` (bundled fixtures only) |
 | `POST /api/replay/step`, `/pause`, `/resume`, `/run-to-end` | `{"idempotency_key": ...}` |
 | `POST /api/trading/start`, `/request-close` | `{"idempotency_key": ...}` |
@@ -331,6 +362,12 @@ Errors return JSON `{"error": CODE, "detail": ...}`:
   `IdempotencyConflictError`.
 - **404:** `ORDER_NOT_FOUND`.
 - **422:** invalid body or fixture.
+
+**Paging.** List endpoints (`replay/events`, `quotes`, `rejected-inputs`,
+`proposals`, `risk-decisions`, `orders`, `fills`, `ledger`, `run-events`)
+take `limit` (1–5000, default 500) and `offset` (default 0). They still
+return a JSON array, with the total in the `X-Total-Count` header. The
+dashboard shows the latest 50 rows of each list.
 
 Command bodies must be JSON. The server listens on `127.0.0.1` only.
 
@@ -352,7 +389,9 @@ secrets are used.
 | `PAPER_SESSION_START` / `_END` | `2026-09-29T13:30:00Z` / `20:00:00Z` | UTC; must match the fixture |
 | `PAPER_SESSION_TIMEZONE` | `America/New_York` | Used to derive local dates |
 
-The mode is always `SAMPLE_PAPER`. Run parameters are pinned at creation.
+The CLI always creates `SAMPLE_PAPER` (synthetic data) runs.
+`HISTORICAL_PAPER` exists in code for FA-1b and shows a separate **HISTORICAL
+DATA — PAPER ONLY** banner. Run parameters are pinned at creation.
 Reusing a run key with different parameters is refused; use a new key.
 
 ## Architecture
@@ -365,8 +404,9 @@ paper-trading/
 │   ├── config.py           centralized settings
 │   ├── contracts/          shared Pydantic records (SPEC.md A–J, Run, Account), types, versions
 │   ├── storage/            SQLite connection, explicit transactions, migration runner
-│   │   └── migrations/     0001_initial, 0002_sample_replay, 0003_trading_workflow (forward-only)
-│   ├── market_data/        fixtures.py (format/checksum/scope), intake.py (quote validation)
+│   │   └── migrations/     0001–0003 (.sql), 0004_datasets_and_data_classes (.py) — forward-only
+│   ├── market_data/        fixtures.py (format/checksum/scope), intake.py (quote validation),
+│   │                       datasets.py (stored datasets, manifests, verification), calendar.py
 │   ├── strategy/           sample_spy_long_call.py — demonstration rules (pure functions)
 │   ├── risk/               policy.py — risk_v1 (pure function)
 │   ├── broker/             paper.py — acceptance, eligibility, cancel, TTL/session expiry
@@ -380,6 +420,7 @@ paper-trading/
 │   │   └── api.py          FastAPI app
 │   ├── web/                Jinja templates, CSS, small command/refresh script
 │   └── __main__.py         CLI
+├── tools/bench_replay.py   replay throughput benchmark (synthetic data)
 └── tests/
 ```
 
@@ -390,6 +431,16 @@ paper-trading/
 | `runs.trading_enabled`, `runs.status_reason` | Trading vs replay-only runs (existing runs → replay-only); why a run is paused, completed, or incomplete |
 | `exit_intents` | Persistent exit intent per position, resolved by the closing fill |
 | Triggers | Run status transitions; replay-only runs stay `READY`; trading flag fixed; proposals and risk decisions immutable; order terms and position entry facts immutable; closed positions final; fill execution rules (later quote, not before submission, same contract/run, full quantity, displayed size, price at touch within limit); exit-intent rules |
+
+### Schema changes in migration 0004 (FA-1a)
+
+| Change | Purpose |
+|---|---|
+| `dataset_manifests`, `datasets`, `dataset_events` | Immutable stored datasets: provenance, sealed header, events read one row at a time |
+| `quote_provenance` | Optional `snapshot_at` / `ingested_at` per accepted quote (never earlier than `observed_at`) |
+| `runs` rebuilt | `mode` ∈ `SAMPLE_PAPER`, `HISTORICAL_PAPER`; `is_sample` must agree and is fixed |
+| `market_quotes` rebuilt | `is_sample` must equal the run's (columns unchanged) |
+| `replay_state` rebuilt | References `datasets`; dataset class must match the run mode |
 
 ## Limitations
 

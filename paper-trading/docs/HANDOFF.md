@@ -1,15 +1,20 @@
 # Handoff: options paper-trading sample app
 
-Status at the end of Step 7 (documentation and handoff). Every command in this
-file was rehearsed on a clean checkout of `paper-trading-step7`.
+Status after FA-1a (historical-data engine readiness, branch
+`historical-engine-readiness`, based on `paper-trading-step7`). The Step 7
+commands below are unchanged and were re-run on this branch. FA-1b (a vendor
+importer) has **not** started: see `docs/HISTORICAL_DATA_PLAN.md`.
 
 ## What the app does
 
 A local, single-user **sample-only, paper-only** options trading simulator.
 
-- **Data.** It replays a versioned, checksummed **synthetic** quote file on a
-  simulated clock. Each quote is validated; rejected inputs are stored with
-  reason codes and never become market data.
+- **Data.** It replays a versioned, checksummed **synthetic** dataset on a
+  simulated clock. Fixture files are stored as datasets, and replay reads one
+  event at a time. Each quote is validated; rejected inputs are stored with
+  reason codes and never become market data. The engine is ready for a
+  separate **HISTORICAL** data class (`HISTORICAL_PAPER` runs, own banner),
+  but no historical data can be stored until an importer is approved (FA-1b).
 - **Account.** A virtual **$100,000** account, where cash is always the sum of
   an immutable ledger.
 - **Trading runs** send each accepted quote through one demonstration
@@ -49,7 +54,8 @@ $0.65, sell @ $4.80 − $0.65, realized **$78.70**, final cash and equity
 | `paper-trading-step4` | Synthetic fixture and deterministic replay |
 | `paper-trading-step5` | Trading workflow and review fixes |
 | `paper-trading-step6` | Stress and E2E verification (`STEP6_VALIDATION.md`), fixes F1–F3, rules 5–6 resolved |
-| `paper-trading-step7` | **This handoff** (documentation only, based on `paper-trading-step6`) |
+| `paper-trading-step7` | Handoff documentation (based on `paper-trading-step6`) |
+| `historical-engine-readiness` | **FA-1a**: datasets, data classes, manifests, calendar, indexed replay, paging, migration 0004 (based on `paper-trading-step7`) |
 
 Each step branch was created from the previous one, so the latest branch
 contains everything.
@@ -59,12 +65,14 @@ contains everything.
 ### Get the code
 
 ```bash
-git clone --branch paper-trading-step7 https://github.com/adrianlorido/PortfolioProjects.git
+git clone --branch historical-engine-readiness https://github.com/adrianlorido/PortfolioProjects.git
 cd PortfolioProjects/paper-trading
 ```
 
 Or, in an existing clone: `git fetch origin` then
-`git checkout paper-trading-step7`.
+`git checkout historical-engine-readiness`. An existing database is upgraded
+with `python -m paper_trading migrate` (migration 0004; back it up first, see
+below).
 
 ### Set up and verify
 
@@ -73,7 +81,7 @@ macOS / Linux:
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements-dev.txt
-python -m pytest            # expect: 324 passed
+python -m pytest            # expect: 426 passed
 ```
 
 Windows PowerShell:
@@ -81,7 +89,7 @@ Windows PowerShell:
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements-dev.txt
-python -m pytest            # expect: 324 passed
+python -m pytest            # expect: 426 passed
 ```
 
 If PowerShell blocks `Activate.ps1`, run
@@ -100,7 +108,8 @@ decides to merge.
    sections. Ambiguities go to the owner before behavior changes (see §13.20
    for the pattern).
 2. **Migrations are forward-only.** Never edit an applied migration (the
-   checksum check refuses to run); add `NNNN_name.sql`.
+   checksum check refuses to run); add `NNNN_name.sql`, or a self-contained
+   `NNNN_name.py` when a table must be rebuilt (see 0004).
 3. **Never reset a user's database.** `serve` and read paths never create or
    migrate a database.
 4. **Money is integer cents; time is UTC ending in `Z`.** The session date is
@@ -109,10 +118,13 @@ decides to merge.
    `app/replay.py` (idempotency key, reconciliation guard, one transaction per
    event). Never write trading tables from the API, the dashboard, or ad-hoc
    code.
-6. **New trading scenarios use fresh runs and their own fixtures**
-   (`tests/trading_helpers.py::build_fixture`), with `CheckedRun` so the
-   independent books check runs after every event. Do not modify
-   `fixtures/sample_spy_worked_trade_v1.json`.
+6. **New trading scenarios use fresh runs and their own fixtures or datasets**
+   (`tests/trading_helpers.py::build_fixture`, `tests/dataset_helpers.py`),
+   with `CheckedRun` so the independent books check runs after every event. Do
+   not modify `fixtures/sample_spy_worked_trade_v1.json`.
+8. **Data classes stay honest.** Synthetic data is always stored as
+   `SYNTHETIC` (a generator in the manifest, no vendor fields), including when
+   it exercises historical-data code. Never label test data HISTORICAL.
 7. **Commit hygiene.** Never commit `.env`, `data/`, `backups/`, `.venv/`, or
    caches; `.gitignore` already excludes them.
 
@@ -199,7 +211,8 @@ automatically.
 - One contract per order; one position or pending entry per run.
 - No partial fills, exercise, assignment, option-expiration handling,
   overnight positions, or settlement rules.
-- Sample (synthetic) data only. Mode is always `SAMPLE_PAPER`.
+- Synthetic data only in practice. `HISTORICAL_PAPER` runs can be created in
+  code, but no historical dataset can be stored until FA-1b.
 - Deferred: live data, brokers, AI/learning, and profitability evaluation.
 
 **Operational:**
@@ -208,8 +221,12 @@ automatically.
 - Listens on `127.0.0.1` only, with no authentication; do not expose it.
 - A run's fixture and session settings are pinned: a different session or
   fixture needs a new run with matching `PAPER_SESSION_*` settings.
-- The dashboard shows one run at a time (run switcher at the top). No charts
-  yet.
+- The dashboard shows one run at a time (run switcher: latest 50 runs) and the
+  latest 50 rows of each growing list; the API pages everything else
+  (`limit`/`offset`, `X-Total-Count`). No charts yet.
+- A dataset is verified in full once per process. Tampering with stored rows
+  while a server keeps running (triggers dropped by hand) is detected at the
+  next process start, not immediately.
 - Commands without `--key` are new commands each time. Repeating `step`
   advances the next event; it never re-executes one. The dashboard reuses its
   key on network errors and 5xx responses.
@@ -231,8 +248,7 @@ automatically.
   endpoint. This needs its own specification, safety review, and explicit
   owner approval, and would be a separate application mode, never a change to
   `SAMPLE_PAPER`.
-- **Live streaming data.** FA-1 covers recorded or historical data imported
-  into fixtures only.
+- **Live streaming data.** FA-1 covers recorded historical data only.
 
 ## Troubleshooting
 

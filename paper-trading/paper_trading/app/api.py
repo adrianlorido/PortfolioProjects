@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Iterator, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from fastapi.staticfiles import StaticFiles
@@ -52,6 +52,25 @@ _ERROR_STATUS = {
     OrderNotOpenError: 409,
     OrderNotFoundError: 404,
 }
+
+
+API_PAGE_DEFAULT = 500
+API_PAGE_MAX = 5000
+
+
+class Page:
+    """``?limit=&offset=`` for list endpoints. Responses stay JSON arrays (backward compatible);
+    the total row count is returned in the ``X-Total-Count`` header."""
+
+    def __init__(self, limit: int = Query(API_PAGE_DEFAULT, ge=1, le=API_PAGE_MAX),
+                 offset: int = Query(0, ge=0)):
+        self.limit, self.offset = limit, offset
+
+    def apply(self, response: Response, total: int) -> dict:
+        response.headers["X-Total-Count"] = str(total)
+        response.headers["X-Limit"] = str(self.limit)
+        response.headers["X-Offset"] = str(self.offset)
+        return {"limit": self.limit, "offset": self.offset}
 
 
 class CommandBody(BaseModel):
@@ -117,8 +136,9 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             run = None
         return {
             "status": "ok",
-            "mode": MODE,
-            "is_sample": True,
+            # The default run's data class; SAMPLE_PAPER (synthetic) before any run exists.
+            "mode": run.mode if run else MODE,
+            "is_sample": run.is_sample if run else True,
             "app_version": __version__,
             "db_schema_version": app.state.schema_version,
             "run_initialized": run is not None,
@@ -150,8 +170,10 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         return queries.display_positions(conn, run.run_id)
 
     @app.get("/api/orders")
-    def orders(run=Depends(current_run), conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
-        return queries.display_orders(conn, run.run_id)
+    def orders(response: Response, page: Page = Depends(), run=Depends(current_run),
+               conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
+        return queries.display_orders(conn, run.run_id,
+                                      **page.apply(response, queries.count_rows(conn, "orders", run.run_id)))
 
     @app.get("/api/closed-trades")
     def closed_trades(run=Depends(current_run), conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
@@ -182,16 +204,22 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         }
 
     @app.get("/api/replay/events")
-    def replay_events(run=Depends(current_run), conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
-        return queries.list_replay_events(conn, run.run_id)
+    def replay_events(response: Response, page: Page = Depends(), run=Depends(current_run),
+                      conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
+        return queries.list_replay_events(
+            conn, run.run_id, **page.apply(response, queries.count_rows(conn, "replay_events", run.run_id)))
 
     @app.get("/api/quotes")
-    def quotes(run=Depends(current_run), conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
-        return [q.model_dump() for q in queries.list_quotes(conn, run.run_id)]
+    def quotes(response: Response, page: Page = Depends(), run=Depends(current_run),
+               conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
+        bounds = page.apply(response, queries.count_rows(conn, "market_quotes", run.run_id))
+        return [q.model_dump() for q in queries.list_quotes(conn, run.run_id, **bounds)]
 
     @app.get("/api/rejected-inputs")
-    def rejected_inputs(run=Depends(current_run), conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
-        return queries.list_rejected_inputs(conn, run.run_id)
+    def rejected_inputs(response: Response, page: Page = Depends(), run=Depends(current_run),
+                        conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
+        return queries.list_rejected_inputs(
+            conn, run.run_id, **page.apply(response, queries.count_rows(conn, "rejected_inputs", run.run_id)))
 
     @app.get("/api/market")
     def market(run=Depends(current_run), conn: sqlite3.Connection = Depends(get_conn)) -> dict:
@@ -227,28 +255,44 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     # --- Step 5: trading runs --------------------------------------------
 
     @app.get("/api/runs")
-    def runs(conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
-        return queries.list_runs(conn)
+    def runs(response: Response, limit: int = Query(API_PAGE_DEFAULT, ge=1, le=API_PAGE_MAX),
+             conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
+        response.headers["X-Total-Count"] = str(conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0])
+        return queries.list_runs(conn, limit=limit)
 
     @app.get("/api/proposals")
-    def proposals(run=Depends(current_run), conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
-        return queries.list_proposals(conn, run.run_id)
+    def proposals(response: Response, page: Page = Depends(), run=Depends(current_run),
+                  conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
+        return queries.list_proposals(
+            conn, run.run_id, **page.apply(response, queries.count_rows(conn, "trade_proposals", run.run_id)))
 
     @app.get("/api/risk-decisions")
-    def risk_decisions(run=Depends(current_run), conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
-        return queries.list_risk_decisions(conn, run.run_id)
+    def risk_decisions(response: Response, page: Page = Depends(), run=Depends(current_run),
+                       conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
+        return queries.list_risk_decisions(
+            conn, run.run_id, **page.apply(response, queries.count_rows(conn, "risk_decisions", run.run_id)))
 
     @app.get("/api/fills")
-    def fills(run=Depends(current_run), conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
-        return queries.list_fills(conn, run.run_id)
+    def fills(response: Response, page: Page = Depends(), run=Depends(current_run),
+              conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
+        return queries.list_fills(conn, run.run_id,
+                                  **page.apply(response, queries.count_rows(conn, "fills", run.run_id)))
 
     @app.get("/api/exit-intents")
     def exit_intents(run=Depends(current_run), conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
         return queries.list_exit_intents(conn, run.run_id)
 
     @app.get("/api/ledger")
-    def ledger(run=Depends(current_run), conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
-        return queries.list_ledger(conn, run.run_id)
+    def ledger(response: Response, page: Page = Depends(), run=Depends(current_run),
+               conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
+        return queries.list_ledger(
+            conn, run.run_id, **page.apply(response, queries.count_rows(conn, "cash_ledger_entries", run.run_id)))
+
+    @app.get("/api/run-events")
+    def run_events(response: Response, page: Page = Depends(), run=Depends(current_run),
+                   conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
+        return queries.list_run_events(
+            conn, run.run_id, **page.apply(response, queries.count_rows(conn, "run_events", run.run_id)))
 
     @app.post("/api/trading/start")
     def trading_start(body: CommandBody, run=Depends(current_run), conn: sqlite3.Connection = Depends(get_conn)):

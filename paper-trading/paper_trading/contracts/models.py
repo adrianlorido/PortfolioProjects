@@ -38,7 +38,11 @@ class Record(BaseModel):
 
 # --- Enumerations ----------------------------------------------------------
 
-Mode = Literal["SAMPLE_PAPER"]
+# Run mode names the data class it replays (FA-1a): SAMPLE_PAPER replays SYNTHETIC
+# data; HISTORICAL_PAPER replays HISTORICAL data. Both are paper-only.
+Mode = Literal["SAMPLE_PAPER", "HISTORICAL_PAPER"]
+DataClass = Literal["SYNTHETIC", "HISTORICAL"]
+MODE_DATA_CLASS = {"SAMPLE_PAPER": "SYNTHETIC", "HISTORICAL_PAPER": "HISTORICAL"}
 RunStatus = Literal["READY", "RUNNING", "PAUSED", "COMPLETED", "INCOMPLETE"]
 OptionType = Literal["CALL", "PUT"]
 Intent = Literal["BUY_TO_OPEN", "SELL_TO_CLOSE"]
@@ -67,7 +71,10 @@ LedgerEntryType = Literal["INITIAL_FUNDING", "BUY_FILL", "SELL_FILL"]
 
 
 class Run(Record):
-    """A sample paper-trading run. Pins versions and parameters at creation.
+    """A paper-trading run. Pins versions and parameters at creation.
+
+    ``is_sample`` is True exactly when the run replays synthetic sample data
+    (mode SAMPLE_PAPER); a HISTORICAL_PAPER run replays historical data.
 
     Fixture fields and the session reference price are nullable only while the
     run is READY (the fixture is attached in Step 4); see SPEC.md 11.2.
@@ -76,7 +83,7 @@ class Run(Record):
     run_id: Id
     init_key: Id
     mode: Mode
-    is_sample: Literal[True]
+    is_sample: Bool
     status: RunStatus
     created_at: UtcTimestamp
     currency: Literal["USD"]
@@ -104,6 +111,8 @@ class Run(Record):
 
     @model_validator(mode="after")
     def _check(self) -> "Run":
+        if self.is_sample != (self.mode == "SAMPLE_PAPER"):
+            raise ValueError("is_sample must be true exactly for SAMPLE_PAPER (synthetic data) runs")
         if parse_utc(self.session_end) <= parse_utc(self.session_start):
             raise ValueError("session_end must be after session_start")
         if len(set(self.watchlist)) != len(self.watchlist):
@@ -160,7 +169,7 @@ class MarketQuote(Record):
     run_id: Id
     contract_id: Id
     source: Id
-    is_sample: Literal[True]
+    is_sample: Bool  # must equal the run's is_sample (enforced by intake and the database)
     source_sequence: Count
     observed_at: UtcTimestamp
     received_at: UtcTimestamp
@@ -172,11 +181,22 @@ class MarketQuote(Record):
     underlying_observed_at: UtcTimestamp
     # Optional per SPEC.md clarification 2; must equal the run's reference when present.
     session_reference_cents: Optional[PositiveCents] = None
+    # Optional provenance times (FA-1a). observed_at is when the market produced the
+    # quote and is the only time used for freshness. snapshot_at is the as-of time of a
+    # vendor snapshot; ingested_at is when a vendor or importer recorded it. Neither
+    # may precede observed_at, so a snapshot can never make an old quote look new.
+    snapshot_at: Optional[UtcTimestamp] = None
+    ingested_at: Optional[UtcTimestamp] = None
 
     @model_validator(mode="after")
     def _check(self) -> "MarketQuote":
         if self.bid_cents > self.ask_cents:
             raise ValueError("bid_cents must not exceed ask_cents")
+        observed = parse_utc(self.observed_at)
+        for name in ("snapshot_at", "ingested_at"):
+            value = getattr(self, name)
+            if value is not None and parse_utc(value) < observed:
+                raise ValueError(f"{name} must not precede observed_at")
         return self
 
 

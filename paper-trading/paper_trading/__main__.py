@@ -92,13 +92,33 @@ def _cmd_init(settings, args) -> int:
     return 0 if rec.ok else 1
 
 
-def _print_replay(conn, run_id) -> None:
+CLI_LIST_LIMIT = 50  # default rows per list; --limit 0 prints every row
+
+
+def _nonnegative(text: str) -> int:
+    value = int(text)
+    if value < 0:
+        raise argparse.ArgumentTypeError("must be 0 or more")
+    return value
+
+
+def _latest(conn, table: str, run_id: str, limit: int) -> dict:
+    """limit/offset for the latest ``limit`` rows (``limit`` 0 = all), plus a note if rows are hidden."""
+    total = queries.count_rows(conn, table, run_id)
+    if not limit or total <= limit:
+        return {"limit": None, "offset": 0}
+    print(f"    (showing the latest {limit} of {total}; use --limit 0 for all)")
+    return {"limit": limit, "offset": total - limit}
+
+
+def _print_replay(conn, run_id, limit: int = CLI_LIST_LIMIT) -> None:
     state = queries.get_replay_state(conn, run_id)
     if state is None:
         print("  replay: no fixture loaded (run: python -m paper_trading load-fixture)")
         return
     market = queries.latest_market_state(conn, run_id)
     print(f"  fixture: {state['fixture_id']} v{state['fixture_version']}  {state['fixture_checksum']}")
+    print(f"  data:    {state['data_class']} from {state['source']}: {state['data_label']}")
     print(f"  replay:  {state['status']}  {state['processed_events']}/{state['total_events']} events  "
           f"simulated clock {market['simulated_clock']}")
     if state["next_event"]:
@@ -108,7 +128,8 @@ def _print_replay(conn, run_id) -> None:
         print(f"  latest:  {q['contract_id']} bid {format_cents(q['bid_cents'])} ask {format_cents(q['ask_cents'])} "
               f"(seq {q['source_sequence']}, observed {q['observed_at']}, "
               f"{q['freshness']} {q['age_seconds']:g}s simulated)")
-    for r in queries.list_rejected_inputs(conn, run_id):
+    page = _latest(conn, "rejected_inputs", run_id, limit)
+    for r in queries.list_rejected_inputs(conn, run_id, **page):
         print(f"  rejected #{r['replay_position']}: seq {r['source_sequence']} -> {', '.join(r['reason_codes'])}")
 
 
@@ -194,8 +215,9 @@ def _cmd_replay_status(settings, args) -> int:
     conn = _open_current(settings)
     try:
         run = queries.get_run(conn, settings.sample_run_key)
-        _print_replay(conn, run.run_id)
-        for e in queries.list_replay_events(conn, run.run_id):
+        _print_replay(conn, run.run_id, args.limit)
+        for e in queries.list_replay_events(conn, run.run_id, **_latest(conn, "replay_events", run.run_id,
+                                                                          args.limit)):
             reasons = f" [{', '.join(e['reason_codes'])}]" if e["reason_codes"] else ""
             print(f"    #{e['replay_position']:>2} evt {e['event_sequence']:>2}  {e['scheduled_at']}  "
                   f"{e['event_type']:<13} {e['fixture_ref'] or '':<22} {e['outcome']}{reasons}")
@@ -234,14 +256,15 @@ def _cmd_trades(settings, args) -> int:
             for d in rec.discrepancies:
                 print(f"  - {d}")
         print("proposals -> risk -> orders:")
-        for p in queries.list_proposals(conn, run.run_id):
+        for p in queries.list_proposals(conn, run.run_id, **_latest(conn, "trade_proposals", run.run_id,
+                                                                    args.limit)):
             risk = p["decision"] + (f" {p['risk_reason_codes']}" if p["risk_reason_codes"] else "")
             order = (f"{p['order_status']}" + (f" ({p['terminal_reason']})" if p["terminal_reason"] else "")
                      if p["order_id"] else "no order")
             print(f"  {p['created_at']} {p['intent']:<13} {p['reason_code']:<14} limit {format_cents(p['limit_cents'])}"
                   f"  risk {risk} (rev {p['account_revision']})  order {order}")
         print("fills:")
-        for f in queries.list_fills(conn, run.run_id):
+        for f in queries.list_fills(conn, run.run_id, **_latest(conn, "fills", run.run_id, args.limit)):
             print(f"  {f['filled_at']} {f['intent']:<13} {f['quantity']} @ {format_cents(f['price_cents'])} "
                   f"gross {format_cents(f['gross_cents'])} fee {format_cents(f['fee_cents'])} "
                   f"cash {format_cents(f['net_cash_delta_cents'])} -> {format_cents(f['balance_after_cents'])} "
@@ -315,9 +338,15 @@ def build_parser() -> argparse.ArgumentParser:
     cancel.add_argument("order_id")
     cancel.add_argument("--key", help="idempotency key; reuse it to retry safely")
     cancel.set_defaults(fn=_trading_command(replay.cancel_order, needs_order=True))
-    sub.add_parser("trades", help="show the trading audit trail").set_defaults(fn=_cmd_trades)
+    trades = sub.add_parser("trades", help="show the trading audit trail")
+    trades.add_argument("--limit", type=_nonnegative, default=CLI_LIST_LIMIT,
+                        help=f"latest rows per list (default {CLI_LIST_LIMIT}; 0 = all)")
+    trades.set_defaults(fn=_cmd_trades)
 
-    sub.add_parser("replay-status", help="show replay progress and events").set_defaults(fn=_cmd_replay_status)
+    rstatus = sub.add_parser("replay-status", help="show replay progress and events")
+    rstatus.add_argument("--limit", type=_nonnegative, default=CLI_LIST_LIMIT,
+                         help=f"latest events to list (default {CLI_LIST_LIMIT}; 0 = all)")
+    rstatus.set_defaults(fn=_cmd_replay_status)
     checksum = sub.add_parser("fixture-checksum", help="print a fixture file's checksum")
     checksum.add_argument("path")
     checksum.set_defaults(fn=_cmd_fixture_checksum)

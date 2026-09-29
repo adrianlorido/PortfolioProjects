@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from paper_trading.accounting.fills import apply_fill, mark_positions, refresh_staleness
@@ -67,7 +67,8 @@ def _run(conn, run_id) -> sqlite3.Row:
 
 
 def _quote(row: sqlite3.Row) -> MarketQuote:
-    data = {k: row[k] for k in MarketQuote.model_fields if k != "schema_version"}
+    # Provenance times (quote_provenance) are audit data; trading never reads them.
+    data = {k: row[k] for k in MarketQuote.model_fields if k != "schema_version" and k in row.keys()}
     return MarketQuote(schema_version=SCHEMA_VERSION, **{**data, "is_sample": bool(row["is_sample"])})
 
 
@@ -82,13 +83,21 @@ def _contracts(conn, run_id) -> tuple[OptionContract, ...]:
     return tuple(doc.contracts)
 
 
+def latest_quote_row(conn, run_id: str, contract_id: str) -> Optional[sqlite3.Row]:
+    """The contract's latest accepted quote: one descending probe of ix_quotes_run_contract_event."""
+    return conn.execute(
+        """SELECT * FROM market_quotes WHERE run_id = ? AND contract_id = ?
+            ORDER BY event_sequence DESC LIMIT 1""", (run_id, contract_id)).fetchone()
+
+
 def _latest_quotes(conn, run_id) -> dict[str, MarketQuote]:
-    rows = conn.execute(
-        """SELECT q.* FROM market_quotes q WHERE q.run_id = ? AND q.event_sequence = (
-               SELECT MAX(event_sequence) FROM market_quotes WHERE run_id = q.run_id AND contract_id = q.contract_id)""",
-        (run_id,),
-    ).fetchall()
-    return {r["contract_id"]: _quote(r) for r in rows}
+    """Latest accepted quote per dataset contract (only dataset contracts can have quotes)."""
+    latest = {}
+    for c in _contracts(conn, run_id):
+        row = latest_quote_row(conn, run_id, c.contract_id)
+        if row is not None:
+            latest[c.contract_id] = _quote(row)
+    return latest
 
 
 def _open_position(conn, run_id) -> Optional[sqlite3.Row]:
@@ -96,15 +105,28 @@ def _open_position(conn, run_id) -> Optional[sqlite3.Row]:
                         (run_id,)).fetchone()
 
 
-def _last_entry_rejections(conn, run_id) -> dict[str, datetime]:
-    """Latest rejection time per contract for entries (risk rejections and acceptance rejections)."""
+def _last_entry_rejections(conn, run_id, clock: str) -> dict[str, datetime]:
+    """Latest rejection time per contract for entries (risk rejections and acceptance rejections).
+
+    Only used for the 60 s per-contract cooldown (clarification 1), so only
+    rejections in the last 60 s can change a decision. Rows are read from
+    (clock - 61 s, floored to the second) onward through an index, which is a
+    superset of that window; the latest time per contract is then computed
+    exactly as before. A contract whose latest rejection is older is absent,
+    which the strategy treats the same as "cooldown over". This keeps the
+    cost bounded by the cooldown window instead of growing with the day.
+    """
+    cutoff = parse_utc(clock) - timedelta(seconds=strategy.REJECTION_COOLDOWN_SECONDS + 1)
+    # Timestamps are RFC 3339 UTC; a bare "YYYY-MM-DDTHH:MM:SS" prefix sorts at or before
+    # every timestamp within that second, so the string bound never drops a row in the window.
+    bound = cutoff.strftime("%Y-%m-%dT%H:%M:%S")
     rows = conn.execute(
         """SELECT p.contract_id, d.evaluated_at AS at FROM risk_decisions d JOIN trade_proposals p USING (proposal_id)
-            WHERE d.run_id = ? AND p.intent = 'BUY_TO_OPEN' AND d.decision = 'REJECTED'
+            WHERE d.run_id = ? AND d.decision = 'REJECTED' AND d.evaluated_at >= ? AND p.intent = 'BUY_TO_OPEN'
            UNION ALL
            SELECT o.contract_id, o.updated_at FROM orders o
-            WHERE o.run_id = ? AND o.intent = 'BUY_TO_OPEN' AND o.status = 'REJECTED'""",
-        (run_id, run_id),
+            WHERE o.run_id = ? AND o.status = 'REJECTED' AND o.intent = 'BUY_TO_OPEN' AND o.updated_at >= ?""",
+        (run_id, bound, run_id, bound),
     ).fetchall()
     latest: dict[str, datetime] = {}
     for r in rows:
@@ -270,7 +292,7 @@ def _entry(conn, run_id, clock, event_quote: MarketQuote) -> Optional[dict]:
                 AND status IN ('PENDING','OPEN')""", (run_id,)).fetchone()[0] > 0,
         has_completed_trade=conn.execute("SELECT COUNT(*) FROM closed_trades WHERE run_id = ?",
                                          (run_id,)).fetchone()[0] > 0,
-        last_entry_rejection_at=_last_entry_rejections(conn, run_id),
+        last_entry_rejection_at=_last_entry_rejections(conn, run_id, clock),
     )
     draft = strategy.evaluate_entry(state, event_quote)
     return _propose_and_route(conn, run, draft, clock) if draft else None

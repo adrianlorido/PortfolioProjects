@@ -11,9 +11,22 @@ Two stages:
 1. Shape. Unknown fields, missing fields, wrong types, negative or
    non-positive values, and malformed timestamps. If any fail, validation stops
    there, because later checks need well-formed values.
-2. Semantics. All applicable reasons are collected: source and sample flag,
-   contract, crossed market, observation freshness against the simulated
-   clock, session window, reference price, and source sequence.
+2. Semantics. All applicable reasons are collected: source and data class
+   (sample flag), contract, crossed market, observation freshness against the
+   simulated clock, provenance times, session window, reference price, and
+   source sequence.
+
+Data class (FA-1a): a synthetic (SAMPLE_PAPER) run accepts only inputs with
+``is_sample: true`` (else NOT_SAMPLE_DATA); a historical (HISTORICAL_PAPER) run
+accepts only ``is_sample: false`` (else DATA_CLASS_MISMATCH).
+
+Provenance times (FA-1a, owner decision 4). ``observed_at`` is when the
+market produced the quote and is the only time used for freshness. Optional
+``snapshot_at`` (as-of time of a vendor snapshot) and ``ingested_at`` (when a
+vendor or importer recorded it) are stored for audit. Neither may precede
+``observed_at`` (INCONSISTENT_PROVENANCE_TIME), and a snapshot cannot be from
+after the simulated clock (FUTURE_SNAPSHOT). A snapshot time never refreshes an
+old observation.
 
 Source-sequence rule (per run and source), using only ACCEPTED quotes:
 
@@ -33,7 +46,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Optional, Protocol
 
 from paper_trading.contracts.types import INT64_MAX, parse_utc, validate_utc_timestamp
 
@@ -50,12 +63,15 @@ REASON_CODES = (
     "NONPOSITIVE_PRICE",
     "SOURCE_MISMATCH",
     "NOT_SAMPLE_DATA",
+    "DATA_CLASS_MISMATCH",
     "UNKNOWN_CONTRACT",
     "CROSSED_QUOTE",
     "FUTURE_OBSERVATION",
     "STALE_QUOTE",
     "FUTURE_UNDERLYING_OBSERVATION",
     "STALE_UNDERLYING",
+    "INCONSISTENT_PROVENANCE_TIME",
+    "FUTURE_SNAPSHOT",
     "OUTSIDE_SESSION",
     "REFERENCE_PRICE_MISMATCH",
     "DUPLICATE_SEQUENCE",
@@ -65,13 +81,31 @@ _ORDER = {code: i for i, code in enumerate(REASON_CODES)}
 
 _STR_FIELDS = ("source", "contract_id")
 _TS_FIELDS = ("observed_at", "underlying_observed_at")
+_OPTIONAL_TS_FIELDS = ("snapshot_at", "ingested_at")
 _SIZE_FIELDS = ("bid_size", "ask_size")
 _NONNEG_INT_FIELDS = ("source_sequence", "bid_cents")
 _POSITIVE_INT_FIELDS = ("ask_cents", "underlying_price_cents")
 REQUIRED_FIELDS = frozenset(
     _STR_FIELDS + _TS_FIELDS + _SIZE_FIELDS + _NONNEG_INT_FIELDS + _POSITIVE_INT_FIELDS + ("is_sample",)
 )
-OPTIONAL_FIELDS = frozenset({"session_reference_cents"})
+OPTIONAL_FIELDS = frozenset({"session_reference_cents"} | set(_OPTIONAL_TS_FIELDS))
+
+
+class AcceptedSequences(Protocol):
+    """Source sequences already ACCEPTED for this run and source.
+
+    A ``frozenset[int]`` works; the replay engine passes an index-backed view
+    so that no per-event scan of past quotes is needed.
+    """
+
+    def __contains__(self, seq: object) -> bool: ...
+
+
+def highest_sequence(accepted: AcceptedSequences) -> Optional[int]:
+    highest = getattr(accepted, "highest", None)
+    if callable(highest):
+        return highest()
+    return max(accepted, default=None)  # type: ignore[type-var]
 
 
 @dataclass(frozen=True)
@@ -82,7 +116,9 @@ class IntakeContext:
     source: str
     contract_ids: frozenset[str]
     session_reference_cents: int
-    accepted_sequences: frozenset[int]
+    accepted_sequences: AcceptedSequences
+    # True for synthetic (SAMPLE_PAPER) runs, False for historical (HISTORICAL_PAPER) runs.
+    expected_is_sample: bool = True
 
 
 @dataclass(frozen=True)
@@ -118,7 +154,7 @@ def _shape(raw: Any) -> set[str]:
             reasons.add("INVALID_TYPE")
     if "is_sample" in raw and raw["is_sample"] is not None and not isinstance(raw["is_sample"], bool):
         reasons.add("INVALID_TYPE")
-    for f in _TS_FIELDS:
+    for f in _TS_FIELDS + _OPTIONAL_TS_FIELDS:
         v = raw.get(f)
         if v is None:
             continue
@@ -151,8 +187,8 @@ def validate_quote_input(raw: Any, ctx: IntakeContext) -> IntakeResult:
     reasons: set[str] = set()
     if raw["source"] != ctx.source:
         reasons.add("SOURCE_MISMATCH")
-    if raw["is_sample"] is not True:
-        reasons.add("NOT_SAMPLE_DATA")
+    if raw["is_sample"] is not ctx.expected_is_sample:
+        reasons.add("NOT_SAMPLE_DATA" if ctx.expected_is_sample else "DATA_CLASS_MISMATCH")
     if raw["contract_id"] not in ctx.contract_ids:
         reasons.add("UNKNOWN_CONTRACT")
     if raw["bid_cents"] > raw["ask_cents"]:
@@ -168,6 +204,13 @@ def validate_quote_input(raw: Any, ctx: IntakeContext) -> IntakeResult:
         reasons.add("FUTURE_UNDERLYING_OBSERVATION")
     elif (ctx.clock - underlying_observed).total_seconds() > MAX_OBSERVATION_AGE_SECONDS:
         reasons.add("STALE_UNDERLYING")
+    snapshot = raw.get("snapshot_at")
+    ingested = raw.get("ingested_at")
+    if (snapshot is not None and parse_utc(snapshot) < observed) or \
+            (ingested is not None and parse_utc(ingested) < observed):
+        reasons.add("INCONSISTENT_PROVENANCE_TIME")
+    if snapshot is not None and parse_utc(snapshot) > ctx.clock:
+        reasons.add("FUTURE_SNAPSHOT")
     window = (ctx.session_start, ctx.session_end)
     if not (window[0] <= observed <= window[1] and window[0] <= underlying_observed <= window[1]
             and window[0] <= ctx.clock <= window[1]):
@@ -180,8 +223,10 @@ def validate_quote_input(raw: Any, ctx: IntakeContext) -> IntakeResult:
     seq = raw["source_sequence"]
     if seq in ctx.accepted_sequences:
         reasons.add("DUPLICATE_SEQUENCE")
-    elif ctx.accepted_sequences and seq < max(ctx.accepted_sequences):
-        reasons.add("OUT_OF_ORDER_SEQUENCE")
+    else:
+        highest = highest_sequence(ctx.accepted_sequences)
+        if highest is not None and seq < highest:
+            reasons.add("OUT_OF_ORDER_SEQUENCE")
 
     if reasons:
         return IntakeResult(None, _sorted(reasons))

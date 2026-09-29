@@ -45,14 +45,16 @@ def utc_now() -> str:
     return format_utc(datetime.now(timezone.utc).replace(microsecond=0))
 
 
-def init_payload(settings: Settings, trading: bool = False) -> dict:
+def init_payload(settings: Settings, trading: bool = False, mode: str = versions.MODE) -> dict:
     """Parameters pinned by initialization. Any change is a different payload.
 
     ``trading_enabled`` is only added for trading runs so that replay-only runs
     created before Step 5 keep their original payload hash.
     """
+    if mode not in versions.MODES:
+        raise ValueError(f"unknown run mode {mode!r}; expected one of {versions.MODES}")
     payload = {
-        "mode": versions.MODE,
+        "mode": mode,
         "currency": settings.currency,
         "starting_cash_cents": settings.starting_cash_cents,
         "watchlist": list(settings.watchlist),
@@ -76,18 +78,23 @@ def _hash(payload: dict) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def init_sample(conn: sqlite3.Connection, settings: Settings, trading: bool = False) -> InitResult:
+def init_sample(conn: sqlite3.Connection, settings: Settings, trading: bool = False,
+                mode: str = versions.MODE) -> InitResult:
     """Create the sample run, account, watchlist, and initial funding.
 
     ``trading=True`` creates a trading-enabled run (Step 5); otherwise the run is
     replay-only (Step 4 behavior) and can never leave READY.
+
+    ``mode`` (FA-1a) selects the data class the run will replay: SAMPLE_PAPER
+    (synthetic, the default and the only mode the CLI offers) or
+    HISTORICAL_PAPER (historical). It is fixed for the life of the run.
 
     Idempotent: keyed by ``settings.sample_run_key``. Re-running with the same
     parameters returns the existing run; different parameters under the same
     key raise ``IdempotencyConflictError``. Never deletes or resets data.
     """
     migrate(conn)
-    payload = init_payload(settings, trading)
+    payload = init_payload(settings, trading, mode)
     payload_hash = _hash(payload)
     key = f"init:{settings.sample_run_key}"
 
@@ -110,8 +117,8 @@ def init_sample(conn: sqlite3.Connection, settings: Settings, trading: bool = Fa
             schema_version=SCHEMA_VERSION,
             run_id=new_id("run"),
             init_key=settings.sample_run_key,
-            mode=versions.MODE,
-            is_sample=True,
+            mode=mode,
+            is_sample=mode == versions.MODE,
             status="READY",
             created_at=now,
             currency=settings.currency,
@@ -169,7 +176,7 @@ def init_sample(conn: sqlite3.Connection, settings: Settings, trading: bool = Fa
                    "fee_per_contract_cents", "entry_risk_limit_cents", "session_timezone", "session_start",
                    "session_end", "simulated_clock", "session_reference_cents", "fixture_id", "fixture_version",
                    "fixture_checksum", "checkpoint_event_sequence"]
-        values = [run.run_id, run.init_key, payload_hash, run.schema_version, run.mode, 1, run.status,
+        values = [run.run_id, run.init_key, payload_hash, run.schema_version, run.mode, int(run.is_sample), run.status,
                   run.created_at, run.currency, run.starting_cash_cents, run.strategy_id,
                   run.strategy_version, run.risk_policy_version, run.execution_model_version,
                   run.fee_schedule_version, run.fee_per_contract_cents, run.entry_risk_limit_cents,
@@ -211,7 +218,7 @@ def init_sample(conn: sqlite3.Connection, settings: Settings, trading: bool = Fa
 
         events = [
             ("RUN_CREATED", {"init_key": run.init_key, "payload_hash": payload_hash,
-                             "trading_enabled": trading}),
+                             "trading_enabled": trading, "mode": run.mode}),
             ("WATCHLIST_SET", {"symbols": list(run.watchlist)}),
             ("ACCOUNT_FUNDED", {"account_id": account.account_id, "amount_cents": run.starting_cash_cents}),
         ]

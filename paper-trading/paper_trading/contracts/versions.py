@@ -16,3 +16,8 @@ def fee_schedule_version(fee_per_contract_cents: int) -> str:
     the fee it actually charges.
     """
     return f"flat_{fee_per_contract_cents}c_v1"
+
+# FA-1a: run modes by data class. SAMPLE_PAPER (above) replays synthetic data;
+# HISTORICAL_PAPER replays historical market data. Both are paper-only.
+HISTORICAL_MODE = "HISTORICAL_PAPER"
+MODES = (MODE, HISTORICAL_MODE)

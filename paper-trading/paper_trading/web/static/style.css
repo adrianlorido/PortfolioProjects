@@ -12,6 +12,9 @@
   --bad-text: #a4231a;
   --neutral-bg: #eef1f5;
   --accent: #2459c6;
+  --historical-banner-bg: #6b3fa0;
+  --historical-bg: #f1eafb;
+  --historical-text: #5a2d91;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -27,6 +30,9 @@
     --bad-text: #ff9b8f;
     --neutral-bg: #232a32;
     --accent: #7aa2f7;
+    --historical-banner-bg: #7d4fb8;
+    --historical-bg: #2a2036;
+    --historical-text: #cfb3f5;
   }
 }
 
@@ -113,6 +119,10 @@ details summary { cursor: pointer; color: var(--accent); }
 
 .pill-trading { background: var(--ok-bg); color: var(--ok-text); }
 .pill-replay { background: var(--neutral-bg); color: var(--muted); }
+/* Data class (FA-1a): distinct colors so synthetic and historical data are never confused. */
+.historical-banner { background: var(--historical-banner-bg); }
+.pill-synthetic { background: var(--neutral-bg); color: var(--text); border: 1px dashed var(--muted); }
+.pill-historical { background: var(--historical-bg); color: var(--historical-text); }
 .pill-running { background: var(--ok-bg); color: var(--ok-text); }
 .pill-completed { background: var(--ok-bg); color: var(--ok-text); }
 .pill-incomplete { background: var(--bad-bg); color: var(--bad-text); }

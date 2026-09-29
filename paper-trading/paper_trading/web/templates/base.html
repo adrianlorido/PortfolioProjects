@@ -1,17 +1,26 @@
 <!doctype html>
 <html lang="en">
+{#- The banner follows the run's mode (data class). A SAMPLE_PAPER run replays synthetic
+    data; a HISTORICAL_PAPER run replays historical data. Pages without a run show the
+    sample banner, the only data this app can load today. -#}
+{%- set historical = d is defined and d.run.mode == 'HISTORICAL_PAPER' -%}
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Paper Trading{% endblock %} · SAMPLE</title>
+  <title>{% block title %}Paper Trading{% endblock %} · {{ 'HISTORICAL' if historical else 'SAMPLE' }}</title>
   <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
 </head>
 <body>
-  <div class="sample-banner" role="alert">SAMPLE DATA — PAPER ONLY</div>
+  {% if historical %}
+  <div class="sample-banner historical-banner" role="alert" data-data-class="HISTORICAL">HISTORICAL DATA — PAPER ONLY</div>
+  {% else %}
+  <div class="sample-banner" role="alert" data-data-class="SYNTHETIC">SAMPLE DATA — PAPER ONLY</div>
+  {% endif %}
   <main>
     {% block content %}{% endblock %}
   </main>
-  <footer>Local simulation. No live market data, no broker connection, no real orders.</footer>
+  <footer>Local simulation. No live market data, no broker connection, no real orders.
+    {%- if historical %} Historical replay shows what recorded quotes would have allowed under the paper rules; it is not a prediction or evidence of profitability.{% endif %}</footer>
   {% block scripts %}{% endblock %}
 </body>
 </html>

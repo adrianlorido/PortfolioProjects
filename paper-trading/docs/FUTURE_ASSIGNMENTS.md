@@ -1,86 +1,97 @@
 # Future assignments
 
-These are scoped work packages for after Step 7. **None is implemented.** Each
+These are scoped work packages for after Step 7. **FA-1a (engine readiness) is
+implemented** on branch `historical-engine-readiness`; the others are not. Each
 starts on a new branch from the latest step branch, begins by reading
 SPEC.md, `docs/HANDOFF.md`, and `STEP6_VALIDATION.md`, and ends with the full
 suite passing plus its own acceptance tests.
 
 **Rules for every assignment:**
-- Mode stays `SAMPLE_PAPER`, with no real-money execution and no AI/learning.
-  Both remain deferred (see `docs/HANDOFF.md`).
+- Paper only. Synthetic data runs as `SAMPLE_PAPER`; historical data may only
+  run as `HISTORICAL_PAPER` (FA-1a), and only after FA-1b's owner decisions.
+  No real-money execution and no AI/learning; both remain deferred (see
+  `docs/HANDOFF.md`).
 - Don't change approved trading or accounting rules. If a rule must change,
   write the SPEC amendment first and get owner approval.
 - Leave these untouched unless the assignment explicitly says otherwise:
   `strategy/`, `risk/`, `broker/`, `accounting/`, `app/trading.py`, and
   `app/replay.py` (trading logic).
-- Never edit an applied migration. New tables or columns go in a new migration.
+- Never edit an applied migration. New tables or columns go in a new migration
+  (`.sql`, or a self-contained `.py` when a table must be rebuilt; see 0004).
 - No network access in tests. No credentials in the repository.
 
 | ID | Assignment | Depends on | Blocking owner decisions |
 |---|---|---|---|
-| FA-1 | Market-data integration (recorded/historical → fixtures) | — | D1–D4 below |
-| FA-2 | Strategy evaluation (measurement only) | none (FA-1 optional, for more fixtures) | D5 |
+| FA-1a | Engine readiness for historical data (provider-independent) | — | **Done** (see `docs/HISTORICAL_DATA_PLAN.md`, SPEC §14) |
+| FA-1b | Historical vendor importer | FA-1a | Plan decisions 1, 3, 4, 5 (see below) |
+| FA-2 | Strategy evaluation (measurement only) | none (FA-1b optional, for historical datasets) | D5; plan decision 7 (outcome-independent dates, point-in-time universe) |
 | FA-3 | Dashboard improvements (read-only views and UX) | none | D6 |
 
 ---
 
-## FA-1: Market-data integration (recorded/historical data into fixtures)
+## FA-1: Historical market data (split into FA-1a and FA-1b)
 
-**Goal.** Convert externally recorded option quotes (a vendor export file) into
-the existing versioned fixture format. The data then flows through the
-unchanged intake → replay → trading path. This is an offline import, not a
-live feed.
+The full plan, owner decisions, and measurements are in
+[`HISTORICAL_DATA_PLAN.md`](HISTORICAL_DATA_PLAN.md).
 
-**Owner decisions required before coding:**
-- **D1:** data source and licensing; whether imported data may be committed or
-  must stay local.
-- **D2:** labeling. Imported fixtures are real historical prices, not
-  synthetic. Decide the `data_label`, a new registered `source` id (e.g.
-  `historical_import_v1`), and whether `is_sample` / `SAMPLE_PAPER` wording
-  changes. This requires a SPEC amendment.
-- **D3:** session calendar (holidays, early closes) and how session
-  boundaries and the reference price are derived.
-- **D4:** contract universe to import (still SPY calls within scope).
+### FA-1a: engine readiness (DONE, branch `historical-engine-readiness`)
+
+- Incremental dataset storage and replay.
+- Data classes and run modes, with separate banners.
+- Immutable manifests and provenance validation.
+- Quote provenance times.
+- Versioned exchange calendar and coverage report.
+- Indexed hot paths and bounded, paged reads.
+- Migration 0004.
+
+No vendor data or importer. Details: SPEC §14.
+
+### FA-1b: vendor importer (NOT STARTED)
+
+**Owner decisions required before coding** (plan decisions 1, 3, 4, 5):
+- vendor and budget, and license terms (may data or derived datasets be kept
+  or committed?);
+- the exact opening-observation definition for the session reference price;
+- the vendor's documented time semantics, and how snapshots are built from
+  them;
+- the price conversion, including fractional-cent SPY midpoints.
 
 **File ownership.**
 
 | Owns (creates or edits) | May touch, with lead review | Must not change |
 |---|---|---|
-| `paper_trading/market_data/importers/` (new package), `tests/test_importers.py`, `tests/fixtures/import_samples/`, CLI subcommand `import-fixture` in `__main__.py`, docs | `market_data/fixtures.py`: register the new source id only; SPEC.md amendment | `market_data/intake.py` rules, `app/replay.py`, all trading/accounting modules, existing fixtures |
+| `paper_trading/market_data/importers/` (new package), `tests/test_importers.py`, small hand-made test files that imitate the vendor format (labeled synthetic), CLI subcommand for importing, docs | `market_data/datasets.py`: register the approved importer in `APPROVED_HISTORICAL_IMPORTERS`; a new calendar version; SPEC amendment | `market_data/intake.py` rules, `app/replay.py`, all trading/accounting modules, existing datasets and fixtures |
 
 **Interfaces.**
-- `importers.<vendor>.read(path) -> Iterable[RawQuoteRow]`: vendor parsing
-  only.
-- `importers.build_fixture(rows, *, contracts, session, reference_cents, fixture_id, fixture_version, source, data_label) -> dict`
-  returns a fixture document with a computed checksum.
-- The output must pass `market_data.fixtures.parse_fixture` unchanged, and
-  loads with the existing `load-fixture --path`.
+- `importers.<vendor>.read(path) -> Iterable[RawRow]`: vendor parsing only;
+  streaming.
+- The importer builds point-in-time events and calls
+  `datasets.store_dataset(..., data_class="HISTORICAL", calendar_id=...,
+  events=<generator>, manifest=<complete historical manifest>)`, then
+  `replay.attach_dataset` on a `HISTORICAL_PAPER` run.
 - Malformed vendor rows are **emitted as raw quote inputs**, so intake rejects
-  them with reason codes. Rows that cannot be represented at all are listed in
-  an import report, never silently dropped.
+  them with reason codes. Rows that cannot be represented at all are counted
+  in the import report, never silently dropped.
 
 **Acceptance criteria.**
-1. The same input file and parameters produce a byte-identical fixture and
-   checksum.
-2. Timestamps are converted to RFC 3339 UTC `Z`. The session date is derived
-   in America/New_York, and daylight-saving transitions are covered by tests.
-3. Prices are converted to integer cents exactly (no float rounding); a test
-   covers sub-cent vendor values.
-4. Contracts outside MVP scope are rejected at import with a clear message.
-5. The import report counts rows read, emitted, and unrepresentable, with
-   reasons.
-6. An imported fixture replays in a trading run with `CheckedRun` and no
-   books discrepancy.
-7. The existing suite passes; the worked example and bundled fixture are
-   unchanged.
-8. No network calls or API keys. Any credentials needed later come from
-   environment variables, documented in `.env.example` without values.
+1. The same raw files and parameters produce the same dataset checksum.
+2. Session boundaries come from the calendar; the coverage report is stored
+   in the manifest; missing rows never move the session.
+3. Prices convert exactly (no floats, no silent rounding); tests cover
+   sub-cent values.
+4. `snapshot_at` never replaces `observed_at`; stale observations stay stale.
+5. The contract universe is point-in-time; no future highs or lows are used.
+6. A historical dataset replays in a `HISTORICAL_PAPER` run with `CheckedRun`
+   and no books discrepancy.
+7. The existing suite passes; synthetic results are unchanged.
+8. No network calls in tests; credentials (if ever needed) come from
+   environment variables documented in `.env.example` without values.
 
 ---
 
 ## FA-2: Strategy evaluation (measurement only)
 
-**Goal.** Run `sample_spy_long_call` v1.0.0 unchanged over a set of fixtures
+**Goal.** Run `sample_spy_long_call` v1.0.0 unchanged over a set of datasets
 and produce a deterministic, reconciled report of what happened. This is
 **not** optimization, learning, or evidence of profitability. The report must
 say so.
@@ -173,4 +184,4 @@ All values are still computed on the server.
 |---|---|---|
 | AI / learning loops, parameter optimization | Outside MVP; risk of overfitting and of the demo strategy being mistaken for an edge | New SPEC section, owner approval, FA-2 results reviewed |
 | Real-money execution / broker adapter | Safety, credentials, regulatory, and financial risk | Separate specification and security review; a distinct mode, never `SAMPLE_PAPER` |
-| Live streaming market data | Needs licensing, clock/latency handling, and a new intake source | FA-1 complete and a live-data SPEC amendment approved |
+| Live streaming market data | Needs licensing, clock/latency handling, and a new intake source | FA-1b complete and a live-data SPEC amendment approved |
