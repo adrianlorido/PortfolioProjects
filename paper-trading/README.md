@@ -1,22 +1,41 @@
 # Options Paper Trading — SAMPLE DATA, PAPER ONLY
 
-A local, sample-only options paper-trading application. It uses synthetic data
-and a virtual $100,000 account. There is **no live market data, no broker
-connection, and no way to place real orders.**
+A local, single-user **sample-only, paper-only** options trading simulator:
 
-The specification is in [`SPEC.md`](SPEC.md). Completed milestones:
+- It replays a versioned **synthetic** quote file on a simulated clock and
+  validates every quote.
+- In a trading run, each accepted quote goes through one demonstration
+  strategy, a risk policy, a limit-order paper broker, and exact integer-cent
+  accounting, all against a virtual **$100,000** account.
+- Everything is shown in a command line and a local dashboard.
+- There is **no live market data, no broker connection, no real orders, and
+  no AI/learning.**
 
-- **Step 3 — foundation:** repository, backend, database, dashboard,
-  initialized $100,000 sample account.
-- **Step 4 — sample-data mode:** versioned synthetic fixture, fixture loading
-  and pinning, quote validation, deterministic restartable replay on a
-  simulated clock.
-- **Step 5 — trading workflow (this version):** sample quote → proposal → risk
-  decision → order → fill → position → closing trade → recorded P&L, for
-  trading-enabled runs.
+The worked example ends at **$100,078.70** cash and equity with **$78.70**
+realized profit, to the cent.
 
 The strategy `sample_spy_long_call` v1.0.0 uses **demonstration rules only. It
 is not a tested or profitable trading strategy.**
+
+**Documents:**
+- [`SPEC.md`](SPEC.md): approved specification, clarifications, and
+  implementation resolutions (§11–13).
+- [`docs/HANDOFF.md`](docs/HANDOFF.md): current state, how to resume work,
+  **database backup/restore**, limitations, troubleshooting.
+- [`docs/FUTURE_ASSIGNMENTS.md`](docs/FUTURE_ASSIGNMENTS.md): scoped next work
+  packages (market data, evaluation, dashboard) and deferred items.
+- [`STEP6_VALIDATION.md`](STEP6_VALIDATION.md): verification matrix and
+  evidence.
+
+**Milestones:**
+- **Step 3 — foundation:** schema, backend, dashboard, $100,000 account.
+- **Step 4 — sample-data mode:** synthetic fixture, validation, deterministic
+  restartable replay.
+- **Step 5 — trading workflow:** quote → proposal → risk → order → fill →
+  position → closing trade → P&L.
+- **Step 6 — verification:** stress and end-to-end tests, fixes F1–F3, entry
+  rules 5–6 resolved.
+- **Step 7 — handoff:** documentation only (this version).
 
 ## Requirements
 
