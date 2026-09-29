@@ -12,8 +12,11 @@ Entry (while flat), numbered as in SPEC.md Section 2:
   2  underlying price >= reference * 1.005  (integer: price * 10000 >= ref * 10050)
   3  standard, unadjusted CALL, multiplier 100
   4  expiration 30-45 calendar days after the simulated America/New_York date
-  5  strike = lowest eligible strike at or above the underlying price
-  6  ties: earliest expiration, then lowest strike, then contract_id
+  5  strike at or above the underlying price; the lowest such strike is taken within
+     the chosen expiration (see rule 6)
+  6  among qualifying contracts: earliest expiration, then lowest strike, then
+     contract_id. Expiration is the primary key: an earlier expiration with a
+     higher strike beats a later expiration with a lower strike (SPEC.md §13.20)
   7  bid > 0 and ask >= bid
   8  spread <= 5% of ask             (integer: (ask - bid) * 10000 <= ask * 500)
   9  quote and underlying observations <= 2 simulated seconds old
@@ -117,7 +120,8 @@ def contract_in_scope(c: OptionContract) -> bool:
 
 
 def select_entry_contract(state: EntryState, underlying_price_cents: int) -> Optional[OptionContract]:
-    """Rules 3-6: eligible terms, then the lowest strike at/above the underlying."""
+    """Rules 3-6. Qualifying: in scope, 30-45 days to expiration, strike >= underlying.
+    Ordering (rule 6): earliest expiration, then lowest strike, then contract_id."""
     today = _local_date(state.clock, state.session_timezone)
     eligible = []
     for c in state.contracts:

@@ -752,3 +752,18 @@ silent or ambiguous; items 1–4 are flagged for review.
       a 5xx response, as it already did after a network error, so a response
       lost after commit is not repeated as a new command.
     - F3: the latest-quote display lists contracts most recent first.
+20. **Entry rules 5 and 6 interaction (flagged for owner confirmation).**
+    - **Implemented reading.** A contract qualifies when it is in scope, 30–45
+      days to expiration, and has strike ≥ underlying. Rule 6 orders the
+      qualifying contracts: earliest expiration, then lowest strike, then
+      contract ID. So "lowest strike" (rule 5) is applied within the earliest
+      expiration. With SPY at $600, an Oct 30 $605 call is selected over a
+      Nov 6 $600 call.
+    - **Alternative reading.** Applied globally, rule 5 would first fix the
+      strike at the lowest eligible strike across all expirations ($600), then
+      use rule 6 only among $600 strikes; the Nov 6 $600 call would be
+      selected.
+    - No code was changed. The implemented reading is pinned by
+      `test_strategy.py::test_earlier_expiration_beats_lower_strike` and
+      `test_step6_stress.py::test_earlier_expiration_with_higher_strike_is_selected_end_to_end`.
+      The bundled worked example has a single contract and is unaffected.

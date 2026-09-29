@@ -594,3 +594,42 @@ def test_f3_latest_quote_is_most_recent_across_contracts(conn, settings, tmp_pat
     assert "C605_OCT30" in panel and "$4.40 / $4.50" in panel
     watch = html.split('id="wl-h"')[1].split("</section>")[0]
     assert "$591.00" in watch                                      # underlying from the most recent quote
+
+
+
+# --- rules 5-6 interaction, end to end (SPEC.md §13.20) ------------------------------
+
+
+def test_earlier_expiration_with_higher_strike_is_selected_end_to_end(conn, settings, tmp_path):
+    contracts = [contract("A_OCT30_605", "2026-10-30", 60500), contract("B_NOV06_600", "2026-11-06", 60000),
+                 contract("C_OCT30_610", "2026-10-30", 61000)]
+    t = CheckedRun(conn, settings, build_fixture(tmp_path, [
+        q("14:00:00", 1, 500, 510, cid="B_NOV06_600"),
+        q("14:00:01", 2, 300, 310, cid="C_OCT30_610"),
+        q("14:00:02", 3, 350, 360, cid="A_OCT30_605"),
+    ], contracts=contracts))
+    t.step_to("s2@14:00:01")
+    assert t.proposals() == []           # selected contract (A) has no quote yet; B and C are not substituted
+    t.step()
+    assert [(p["contract_id"], p["limit_cents"]) for p in t.proposals()] == [("A_OCT30_605", 360)]
+
+
+# --- reconciliation marks against the position's OWN contract ------------------------
+
+
+def test_mark_check_uses_the_positions_own_contract(conn, settings, tmp_path):
+    from paper_trading.accounting import reconcile
+
+    t = CheckedRun(conn, settings, build_fixture(tmp_path, [
+        q("14:00:00", 1, 390, 400, cid="C600_OCT30"), q("14:00:01", 2, 390, 400, cid="C600_OCT30"),
+        q("14:00:02", 3, 440, 450, cid="C605_OCT30", ref="other_contract")], contracts=MULTI))
+    t.step_to("other_contract")          # newer quote, but for a different contract
+    (pos,) = t.positions()
+    own_latest = conn.execute("SELECT quote_id FROM market_quotes WHERE source_sequence = 2").fetchone()[0]
+    assert pos.contract_id == "C600_OCT30" and pos.mark_quote_id == own_latest and pos.market_value_cents == 39_000
+    assert reconcile(conn, t.run_id).ok  # the other contract's newer quote does not make the mark "not latest"
+    other = conn.execute("SELECT quote_id FROM market_quotes WHERE source_sequence = 3").fetchone()[0]
+    conn.execute("UPDATE positions SET mark_quote_id = ?, market_value_cents = 44000, "
+                 "unrealized_pnl_cents = 44000 - remaining_cost_basis_cents", (other,))
+    result = reconcile(conn, t.run_id)
+    assert not result.ok and any("another run or contract" in d for d in result.discrepancies)

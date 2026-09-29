@@ -97,6 +97,17 @@ def test_strike_selection_and_tie_breaks():
     assert s.evaluate_entry(st2, Q(und=60001)).contract_id == "K605"       # 600 is now below the underlying
 
 
+def test_earlier_expiration_beats_lower_strike():
+    """Rule 6 ordering is expiration first. SPEC.md §13.20 records this interpretation of rules 5-6."""
+    a = C(contract_id="A_OCT30_605", expiration="2026-10-30", strike=60500)   # earlier expiry, higher strike
+    b = C(contract_id="B_NOV06_600", expiration="2026-11-06", strike=60000)   # later expiry, lowest strike
+    c = C(contract_id="C_OCT30_610", expiration="2026-10-30", strike=61000)   # same expiry as A, higher strike
+    quotes = [Q(cid=x.contract_id, qid=x.contract_id) for x in (a, b, c)]
+    st = entry_state([b, c, a], quotes)
+    assert s.select_entry_contract(st, 60000).contract_id == "A_OCT30_605"
+    assert s.evaluate_entry(st, quotes[0]).contract_id == "A_OCT30_605"
+
+
 def test_selected_contract_needs_its_own_current_quote():
     # The event quote is for another contract; the selected contract has no quote yet -> no entry.
     contracts = [C(contract_id="K600", strike=60000), C(contract_id="K605", strike=60500)]

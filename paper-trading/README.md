@@ -182,12 +182,12 @@ is refused. Without `--key`, each invocation is a new command.
 python -m pytest            # macOS / Linux / PowerShell alike
 ```
 
-The suite has 321 tests and runs in about 20 seconds. It uses temporary
+The suite has 324 tests and runs in about 20 seconds. It uses temporary
 databases and never touches `data/`.
 
 | Area | File |
 |---|---|
-| Strategy thresholds and boundaries (0.5% entry, 5% spread, 30–45 days in New York dates, strike/tie selection, freshness, cooldown, profit/loss/time exits, retry codes); risk_v1 reasons and inclusive limits | `tests/test_strategy.py` |
+| Strategy thresholds and boundaries (0.5% entry, 5% spread, 30–45 days in New York dates, contract selection (earliest expiration, then lowest strike ≥ underlying, then ID; SPEC.md §13.20), freshness, cooldown, profit/loss/time exits, retry codes); risk_v1 reasons and inclusive limits | `tests/test_strategy.py` |
 | Worked example to the cent at every event; event order; buy/sell limits; no same-quote fills; invalid quotes; displayed size; reservations; marks don't bump revision; stale-revision and cash rechecks at acceptance; duplicate submit/fill; conflicting keys; cancel entry/exit; TTL boundaries and time jumps; exit retries across restart; cooldown; no re-entry; loss, time, and manual exits; session end INCOMPLETE; rollback mid-event; restart without double execution; reconciliation-failure pause; determinism; lifecycle guards | `tests/test_trading.py` |
 | Trading over HTTP, dashboard content, cancel/manual close, startup reconciliation pause | `tests/test_trading_api.py` |
 | Step 5 review: reconciliation blocks start, resume, step, replay-to-end, manual close, cancel, and order acceptance; reads stay available; untrusted display labeling and isolation; marks and STALE labels don't change the revision | `tests/test_step5_review.py` |
