@@ -1,0 +1,14 @@
+[project]
+name = "paper-trading"
+version = "0.1.0"
+description = "Local, sample-only options paper-trading app (SAMPLE DATA - PAPER ONLY)"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+pythonpath = ["."]
+filterwarnings = [
+    # Third-party notice from starlette's TestClient; unrelated to this app.
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+]

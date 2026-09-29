@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Not initialized{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>No sample run found</h1>
+  <p>{{ message }}</p>
+  <pre class="cmd">python -m paper_trading init-sample</pre>
+</section>
+{% endblock %}

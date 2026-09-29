@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+{% set s = d.snapshot %}
+<header class="page-head">
+  <div>
+    <h1>Options Paper Trading</h1>
+    <p class="muted">
+      Run <code>{{ d.run.run_id }}</code> ·
+      status <span class="pill pill-{{ d.run.status | lower }}">{{ d.run.status }}</span> ·
+      mode <strong>{{ d.run.mode }}</strong>
+    </p>
+  </div>
+  <div class="head-actions">
+    <span id="recon" class="pill {{ 'pill-ok' if d.reconciliation.ok else 'pill-bad' }}"
+          title="{{ d.reconciliation.discrepancies | join('; ') }}">
+      {{ 'Ledger reconciled' if d.reconciliation.ok else 'Reconciliation FAILED' }}
+    </span>
+    <button id="refresh" type="button">Refresh</button>
+  </div>
+</header>
+
+<section aria-labelledby="acct-h">
+  <h2 id="acct-h">Account <span class="muted small">as of {{ s.as_of }} (simulated) · revision <span data-field="account_revision">{{ s.account_revision }}</span></span></h2>
+  <div class="metrics">
+    <div class="metric"><span class="label">Starting cash</span>
+      <span class="value" data-field="starting_cash_cents">{{ s.starting_cash_cents | usd }}</span></div>
+    <div class="metric"><span class="label">Cash</span>
+      <span class="value" data-field="cash_cents">{{ s.cash_cents | usd }}</span>
+      <span class="note">Sum of ledger entries</span></div>
+    <div class="metric"><span class="label">Reserved cash</span>
+      <span class="value" data-field="reserved_cash_cents">{{ s.reserved_cash_cents | usd }}</span>
+      <span class="note">Held by open buy orders</span></div>
+    <div class="metric"><span class="label">Available cash</span>
+      <span class="value" data-field="available_cash_cents">{{ s.available_cash_cents | usd }}</span></div>
+    <div class="metric"><span class="label">Equity</span>
+      <span class="value" data-field="equity_cents">{{ s.equity_cents | usd }}</span>
+      <span class="note">Valuation: <span data-field="valuation_status">{{ s.valuation_status }}</span></span></div>
+    <div class="metric"><span class="label">Realized P&amp;L</span>
+      <span class="value" data-field="realized_pnl_cents" data-signed>{{ s.realized_pnl_cents | usd_signed }}</span>
+      <span class="note">Includes fees</span></div>
+    <div class="metric"><span class="label">Unrealized P&amp;L</span>
+      <span class="value" data-field="unrealized_pnl_cents" data-signed>{{ s.unrealized_pnl_cents | usd_signed }}</span>
+      <span class="note">Marked at bid; excludes exit fee</span></div>
+    <div class="metric"><span class="label">Fees paid</span>
+      <span class="value" data-field="fees_paid_cents">{{ s.fees_paid_cents | usd }}</span></div>
+  </div>
+</section>
+
+<div class="two-col">
+  <section class="panel" aria-labelledby="wl-h">
+    <h2 id="wl-h">Watchlist</h2>
+    <ul class="watchlist">
+      {% for sym in d.run.watchlist %}<li><strong>{{ sym }}</strong> <span class="muted">No quotes loaded</span></li>{% endfor %}
+    </ul>
+  </section>
+  <section class="panel" aria-labelledby="run-h">
+    <h2 id="run-h">Run parameters</h2>
+    <dl class="kv">
+      <dt>Session</dt><dd>{{ d.session_local_date }} ({{ d.run.session_timezone }})<br>
+        <span class="muted small">{{ d.run.session_start }} → {{ d.run.session_end }}</span></dd>
+      <dt>Strategy</dt><dd>{{ d.run.strategy_id }} v{{ d.run.strategy_version }}</dd>
+      <dt>Risk ceiling</dt><dd>{{ d.run.entry_risk_limit_cents | usd }} per entry</dd>
+      <dt>Fees</dt><dd>{{ d.run.fee_per_contract_cents | usd }} per contract per fill ({{ d.run.fee_schedule_version }})</dd>
+      <dt>Fixture</dt><dd>{{ d.run.fixture_id or 'Not loaded' }}</dd>
+    </dl>
+  </section>
+</div>
+
+<section class="panel" aria-labelledby="ctl-h">
+  <h2 id="ctl-h">Controls</h2>
+  <div class="controls">
+    <button type="button" disabled>Start run — Not implemented</button>
+    <button type="button" disabled>Step — Not implemented</button>
+    <button type="button" disabled>Request close — Not implemented</button>
+  </div>
+  <p class="muted small">The trading workflow arrives in Step 5. No orders can be created yet.</p>
+</section>
+
+<section class="panel" aria-labelledby="pos-h">
+  <h2 id="pos-h">Positions</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Contract</th><th>Status</th><th class="num">Qty</th><th class="num">Entry</th>
+      <th class="num">Cost basis</th><th class="num">Market value</th><th class="num">Unrealized</th><th>Valuation</th></tr></thead>
+    <tbody>
+    {% for p in d.positions %}
+      <tr><td><code>{{ p.contract_id }}</code></td><td>{{ p.status }}</td><td class="num">{{ p.quantity }}</td>
+        <td class="num">{{ p.entry_price_cents | usd }}</td><td class="num">{{ p.remaining_cost_basis_cents | usd }}</td>
+        <td class="num">{{ p.market_value_cents | usd }}</td><td class="num">{{ p.unrealized_pnl_cents | usd_signed }}</td>
+        <td>{{ p.valuation_status }}</td></tr>
+    {% else %}
+      <tr class="empty"><td colspan="8">No positions.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+
+<section class="panel" aria-labelledby="ord-h">
+  <h2 id="ord-h">Orders</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Submitted</th><th>Intent</th><th>Contract</th><th class="num">Qty</th><th class="num">Limit</th>
+      <th>Status</th><th class="num">Reserved</th><th>Reason</th></tr></thead>
+    <tbody>
+    {% for o in d.orders %}
+      <tr><td>{{ o.submitted_at }}</td><td>{{ o.intent }}</td><td><code>{{ o.contract_id }}</code></td>
+        <td class="num">{{ o.quantity }}</td><td class="num">{{ o.limit_cents | usd }}</td><td>{{ o.status }}</td>
+        <td class="num">{{ o.reserved_cash_cents | usd }}</td><td>{{ o.terminal_reason or '' }}</td></tr>
+    {% else %}
+      <tr class="empty"><td colspan="8">No orders.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+
+<section class="panel" aria-labelledby="hist-h">
+  <h2 id="hist-h">Trade history</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Closed</th><th>Opened</th><th class="num">Qty</th><th class="num">Entry cost</th>
+      <th class="num">Exit proceeds</th><th class="num">Fees</th><th class="num">Realized</th><th>Exit reason</th></tr></thead>
+    <tbody>
+    {% for t in d.closed_trades %}
+      <tr><td>{{ t.closed_at }}</td><td>{{ t.opened_at }}</td><td class="num">{{ t.quantity }}</td>
+        <td class="num">{{ t.entry_cost_cents | usd }}</td><td class="num">{{ t.exit_net_proceeds_cents | usd }}</td>
+        <td class="num">{{ t.total_fees_cents | usd }}</td><td class="num">{{ t.realized_pnl_cents | usd_signed }}</td>
+        <td>{{ t.exit_reason }}</td></tr>
+    {% else %}
+      <tr class="empty"><td colspan="8">No closed trades.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', path='dashboard.js') }}" defer></script>{% endblock %}

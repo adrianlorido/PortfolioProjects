@@ -1,0 +1,564 @@
+# Options Paper-Trading MVP — Specification
+
+Source of truth for the `paper-trading/` application. Sections 1–9 are the
+approved design (project Steps 1 and 2). Section 10 records the approved
+clarifications, which **take precedence** over Sections 1–9 where they differ.
+Section 11 records implementation resolutions of contradictions and routine
+details made during Step 3.
+
+The MVP is one local app with a deterministic paper-trading engine, a SQLite
+database, and a browser dashboard. It uses a fixed sample-data replay to
+demonstrate a complete trade.
+
+---
+
+## 1. Architecture and approved defaults
+
+| Setting | Default |
+|---|---|
+| Virtual account | USD, starting cash $100,000 |
+| Watchlist | SPY |
+| Strategy | One rule-based long-call strategy |
+| Position limit | One open position or pending entry |
+| Order quantity | One contract |
+| Entry risk ceiling | 1% of starting cash, including entry fee |
+| Fees | $0.65 per contract per fill, a configurable simulation assumption |
+| Execution | Limit orders; buy at ask, sell at bid when eligible |
+| Data | Versioned synthetic fixture with a simulated clock |
+| Deployment | Local machine, one backend process |
+| Mode | `SAMPLE_PAPER` only |
+
+Starting cash and fees become immutable when a run starts. Changing them
+creates a new run, preserving the original results.
+
+### Module responsibilities
+
+| Module | Owns | Boundary |
+|---|---|---|
+| Market data | Contract definitions, normalized quotes, source metadata | Supplies data; cannot place orders |
+| Strategy | Versioned rules, entry/exit proposals | Proposes trades; cannot change balances |
+| Risk | Approval/rejection records | Checks proposals; cannot execute |
+| Paper broker | Order lifecycle, fill eligibility, reservations | Executes approved proposals under fixed rules |
+| Accounting | Cash ledger, position accounting, closed-trade results | Calculates money and ownership from fills |
+| Storage | Transactions, uniqueness, referential integrity, replay checkpoint | Persists records atomically |
+| Dashboard | Read models and user commands | Displays backend calculations; never computes authoritative balances |
+
+A small application coordinator processes events in order and connects these
+modules.
+
+### Technology stack
+
+| Component | Choice | Reason and tradeoff |
+|---|---|---|
+| Backend | Python + FastAPI | Clear interfaces and validation |
+| Dashboard | Server-rendered HTML with lightweight JavaScript | One application to run |
+| Database | SQLite | One local account and one writer; move to PostgreSQL if concurrent services become necessary |
+| Money | Integer cents; exact decimal arithmetic for ratios | Avoids floating-point accounting errors |
+| Validation | Pydantic models with a documented JSON contract | Centralized input validation |
+| Verification | pytest | Focused accounting, execution, and recovery checks |
+
+SQLite transaction behavior must be configured explicitly.
+
+---
+
+## 2. Demonstration strategy
+
+Strategy identifier: `sample_spy_long_call`, version `1.0.0`. These rules
+demonstrate the infrastructure. They are not a tested trading edge.
+
+### Entry
+
+Evaluate each valid sample quote while flat:
+
+1. Underlying must be SPY.
+2. Current underlying price must be at least 0.5% above the session reference price.
+3. Contract must be a standard, unadjusted call with a multiplier of 100.
+4. Expiration must be 30–45 calendar days away, measured using the simulated date in America/New_York.
+5. Strike must be the lowest eligible strike at or above the underlying price.
+6. If multiple contracts qualify, select earliest expiration, then lowest strike, then contract ID.
+7. Bid must be positive; ask must be greater than or equal to bid.
+8. Spread must be no more than 5% of ask.
+9. Quote and underlying observation must each be no more than 2 simulated seconds old.
+10. Proposed quantity is one contract and proposed buy limit equals the observed ask.
+11. Entry cost plus fee must fit both available cash and the $1,000 risk ceiling.
+
+No averaging down, additional entries, or re-entry after a completed trade
+within the same run.
+
+### Exit
+
+On each subsequent valid quote, propose closing the entire position when the
+first applicable condition occurs:
+
+| Condition | Trigger |
+|---|---|
+| Profit target | Bid ≥ 120% of entry fill price |
+| Loss threshold | Bid ≤ 90% of entry fill price |
+| Time exit | Simulated time ≥ 30 minutes after entry |
+| Manual close | User requests a closing proposal |
+
+A closing proposal uses the current bid as its sell limit. Target and loss
+triggers use premium prices before fees; reported P&L includes fees. The loss
+threshold is an exit trigger, not a guaranteed maximum loss.
+
+---
+
+## 3. Workflow, execution, and accounting
+
+1. Normalize and persist a quote.
+2. Evaluate the strategy using only information available at that event.
+3. Persist a proposal and risk decision.
+4. If approved, create an order and reserve cash or contracts.
+5. Evaluate the order against the next eligible quote event.
+6. If executable, persist the fill and accounting changes together.
+7. Update the dashboard.
+8. Generate and execute a closing proposal.
+9. Record the closed trade and reconcile the account.
+
+An order cannot fill from the same quote that caused its proposal.
+
+### Fill model
+
+| Order | Eligibility | Fill price |
+|---|---|---|
+| Buy to open | Ask ≤ buy limit; sufficient displayed ask size | Ask |
+| Sell to close | Bid ≥ sell limit; sufficient displayed bid size | Bid |
+
+- Fills are all-or-none; displayed size is measured in contracts.
+- Missing size means no fill.
+- A quote's displayed capacity cannot be reused for multiple fills.
+- No midpoint fills, price improvement, random fills, hidden liquidity, or additional slippage model.
+- Displayed quotes do not guarantee real execution.
+
+### Quote validation
+
+Reject execution against a quote when:
+
+- Prices or sizes are negative, required fields are missing, or bid exceeds ask.
+- Its observation time is in the simulated future or more than two seconds old.
+- Its source sequence is duplicated or moves backward.
+- Its contract, run, or source does not match the order.
+- It arrives outside the fixture's permitted session.
+- It predates order submission.
+
+Invalid inputs are logged with reasons and do not advance the strategy's valid
+market state.
+
+### Order lifecycle
+
+| From | To | Cause |
+|---|---|---|
+| PENDING | OPEN | Approval and reservation committed |
+| PENDING | REJECTED | Validation or risk rejection |
+| OPEN | FILLED | Eligible executable quote |
+| OPEN | CANCELED | User or coordinator cancellation |
+| OPEN | EXPIRED | Order TTL or sample-session end |
+
+Terminal states cannot change. `EXPIRED` means order expiration, not option
+expiration. Every order has a 60-second simulated TTL; at the expiration
+timestamp, expiration is processed before quotes. Cancel and fill requests are
+processed serially; whichever commits first determines the outcome. Orders
+cannot be edited; use cancel-and-replace.
+
+### Cash and positions
+
+For quantity q, multiplier m, premium p:
+
+- Entry cash debit = p × m × q + entry fee
+- Closing cash credit = p × m × q − exit fee
+- Position cost basis = entry premium total + entry fee
+- Realized P&L = closing credit − position cost basis
+
+While a buy order is open:
+
+- Reserved cash = limit × multiplier × quantity + expected entry fee
+- Available cash = cash − reserved cash
+- Reservation changes available cash, not cash itself.
+- Filling releases the reservation and deducts actual cost.
+- Canceling or expiring releases the reservation without a cash debit.
+
+A sell order reserves the position's contracts.
+
+Open positions are marked at the latest valid bid:
+
+- Market value = bid × multiplier × quantity
+- Unrealized P&L = market value − cost basis
+- Equity = cash + market value
+
+Unrealized P&L excludes the prospective exit fee; display that convention
+beside the number. A stale mark is retained and labeled stale; never silently
+substitute zero.
+
+### Persistence and recovery
+
+One database transaction commits: order transition and fill, ledger entry,
+reservation release, position change, closed-trade record (if applicable), and
+replay checkpoint. An accepted order and its reservation also commit
+atomically. Risk approval is bound to an account revision; acceptance rechecks
+that revision and available funds.
+
+Each command has an idempotency key: same key and same payload returns the
+original result; same key and different payload is rejected as a conflict.
+
+A restart reloads the last committed checkpoint, reconciles ledger and
+positions, and resumes without duplicating fills. Reconciliation failure pauses
+the run.
+
+---
+
+## 4. Supported scope and enforced exclusions
+
+| Deferred capability | MVP enforcement |
+|---|---|
+| Live trading | No live broker adapter or real-order endpoint |
+| Live market data | Only the registered synthetic fixture provider is accepted |
+| Partial fills | Require full displayed size; otherwise leave order open |
+| Short options and spreads | Reject anything except single-leg buy-to-open/sell-to-close |
+| Adjusted contracts | Require standard deliverable and multiplier 100 |
+| Exercise and assignment | No exercise instruction or short position support |
+| Option expiration | Fixture dates must remain at least seven days before expiration |
+| Overnight positions | Sample session must close flat |
+| Settlement rules | Sample cash is immediately reusable; no claim of cash-account compliance |
+| AI and backtesting research | No learning loop or profitability assessment |
+
+If a fixture ends with a position open, mark the run `INCOMPLETE` and show the
+remaining exposure. Never invent a closing fill or realized profit.
+
+---
+
+## 5. Shared schema conventions
+
+- Every record has `schema_version: "1.0"`.
+- IDs are opaque nonempty strings.
+- Timestamps are RFC 3339 UTC strings ending in `Z`. Dates use `YYYY-MM-DD`.
+- `*_cents` fields are signed 64-bit integers; nonnegative unless noted.
+- Premium and strike cents are per underlying share, not per contract.
+- Counts and sequences are integers. Ratios use integer basis points.
+- Required-but-unknown values are `null` only where permitted.
+- Unknown fields and unsupported schema versions are rejected.
+- Each run pins its strategy, risk policy, execution model, fee schedule, and fixture versions.
+- Every execution/accounting record belongs to a `run_id`; the run fixes `mode: "SAMPLE_PAPER"` and `is_sample: true`.
+
+A **Run** record holds starting cash, watchlist, versions, simulated clock,
+session boundaries, fixture checksum, checkpoint, and status: `READY`,
+`RUNNING`, `PAUSED`, `COMPLETED`, or `INCOMPLETE`.
+
+### A. Option contract (market data)
+
+```json
+{
+  "schema_version": "1.0", "contract_id": "c1", "underlying": "SPY",
+  "expiration_date": "2026-10-30", "option_type": "CALL", "strike_cents": 60000,
+  "currency": "USD", "multiplier": 100, "deliverable": "100_SPY_SHARES",
+  "exercise_style": "AMERICAN", "settlement_type": "PHYSICAL", "adjusted": false
+}
+```
+
+`option_type` permits CALL or PUT; the MVP rejects puts for trading. Strike and
+multiplier positive. Economic identity is unique across underlying, expiration,
+type, strike, currency, and deliverable.
+
+### B. Market quote (market data)
+
+```json
+{
+  "schema_version": "1.0", "quote_id": "q1", "run_id": "r1", "contract_id": "c1",
+  "source": "synthetic_fixture_v1", "is_sample": true, "source_sequence": 1,
+  "observed_at": "2026-09-29T14:00:00Z", "received_at": "2026-09-29T14:00:00Z",
+  "bid_cents": 390, "ask_cents": 400, "bid_size": 10, "ask_size": 10,
+  "underlying_price_cents": 60000, "underlying_observed_at": "2026-09-29T14:00:00Z",
+  "session_reference_cents": 59700
+}
+```
+
+Prices and sizes nonnegative; ask, underlying, and reference positive; bid ≤
+ask. Source sequence unique within run and source. (See clarification 2 for
+`session_reference_cents`.)
+
+### C. Trade proposal (strategy)
+
+```json
+{
+  "schema_version": "1.0", "proposal_id": "p1", "run_id": "r1", "account_id": "a1",
+  "contract_id": "c1", "position_id": null, "quote_id": "q1",
+  "strategy_id": "sample_spy_long_call", "strategy_version": "1.0.0",
+  "created_at": "2026-09-29T14:00:00Z", "intent": "BUY_TO_OPEN", "quantity": 1,
+  "limit_cents": 400, "reason_code": "ENTRY_SIGNAL",
+  "reason": "Underlying exceeded the 0.5% entry threshold.",
+  "exit_rules": {"profit_target_bps": 2000, "loss_threshold_bps": 1000, "max_hold_seconds": 1800},
+  "idempotency_key": "r1-entry-q1"
+}
+```
+
+`position_id` null for entry, required for closing. Intent `BUY_TO_OPEN` or
+`SELL_TO_CLOSE`. Reason codes: `ENTRY_SIGNAL`, `PROFIT_TARGET`,
+`LOSS_THRESHOLD`, `TIME_EXIT`, `MANUAL_CLOSE`, `EXIT_RETRY`.
+
+### D. Risk decision (risk)
+
+```json
+{
+  "schema_version": "1.0", "risk_decision_id": "rd1", "run_id": "r1", "proposal_id": "p1",
+  "evaluated_at": "2026-09-29T14:00:00Z", "policy_version": "risk_v1",
+  "account_revision": 1, "decision": "APPROVED", "reason_codes": [],
+  "required_cash_cents": 40065, "available_cash_cents": 10000000,
+  "entry_risk_cents": 40065, "entry_risk_limit_cents": 100000
+}
+```
+
+Rejected decisions require at least one reason code: `INSUFFICIENT_CASH`,
+`RISK_LIMIT`, `POSITION_LIMIT`, `INVALID_QUOTE`, `UNSUPPORTED_CONTRACT`,
+`INSUFFICIENT_POSITION`, `STALE_ACCOUNT_REVISION`. For closes, required cash
+and entry risk are zero.
+
+### E. Order (paper broker)
+
+```json
+{
+  "schema_version": "1.0", "order_id": "o1", "run_id": "r1", "account_id": "a1",
+  "proposal_id": "p1", "risk_decision_id": "rd1", "contract_id": "c1", "position_id": null,
+  "intent": "BUY_TO_OPEN", "quantity": 1, "limit_cents": 400, "status": "OPEN",
+  "submitted_at": "2026-09-29T14:00:00Z", "updated_at": "2026-09-29T14:00:00Z",
+  "expires_at": "2026-09-29T14:01:00Z", "after_source_sequence": 1,
+  "reserved_cash_cents": 40065, "reserved_contracts": 0,
+  "idempotency_key": "r1-order-p1", "terminal_reason": null
+}
+```
+
+Terminal reason required for rejection, cancellation, or expiration. Buy
+orders reserve cash; sell orders reserve contracts. Terminal orders retain no
+reservations.
+
+### F. Fill (paper broker, immutable)
+
+```json
+{
+  "schema_version": "1.0", "fill_id": "f1", "run_id": "r1", "order_id": "o1", "quote_id": "q2",
+  "filled_at": "2026-09-29T14:00:01Z", "quantity": 1, "price_cents": 400, "multiplier": 100,
+  "gross_cents": 40000, "fee_cents": 65,
+  "execution_model_version": "next_quote_touch_v1", "fee_schedule_version": "flat_65c_v1"
+}
+```
+
+gross = price × multiplier × quantity. One fill per order.
+
+### G. Position (accounting)
+
+```json
+{
+  "schema_version": "1.0", "position_id": "pos1", "run_id": "r1", "account_id": "a1",
+  "contract_id": "c1", "entry_fill_id": "f1", "opened_at": "2026-09-29T14:00:01Z",
+  "closed_at": null, "status": "OPEN", "quantity": 1, "reserved_contracts": 0,
+  "entry_price_cents": 400, "remaining_cost_basis_cents": 40065, "mark_quote_id": "q2",
+  "market_value_cents": 39000, "unrealized_pnl_cents": -1065, "valuation_status": "CURRENT"
+}
+```
+
+Closed positions have zero quantity, reserved contracts, remaining basis,
+market value, and unrealized P&L.
+
+### H. Account snapshot (accounting read model)
+
+```json
+{
+  "schema_version": "1.0", "snapshot_id": "as1", "run_id": "r1", "account_id": "a1",
+  "account_revision": 3, "as_of": "2026-09-29T14:00:01Z", "currency": "USD",
+  "starting_cash_cents": 10000000, "cash_cents": 9959935, "reserved_cash_cents": 0,
+  "available_cash_cents": 9959935, "market_value_cents": 39000, "equity_cents": 9998935,
+  "realized_pnl_cents": 0, "unrealized_pnl_cents": -1065, "fees_paid_cents": 65,
+  "valuation_status": "CURRENT"
+}
+```
+
+Snapshots are derived records, not an independent source of cash truth.
+
+### I. Cash ledger entry (accounting, immutable)
+
+```json
+{
+  "schema_version": "1.0", "ledger_entry_id": "l2", "run_id": "r1", "account_id": "a1",
+  "ledger_sequence": 2, "recorded_at": "2026-09-29T14:00:01Z", "entry_type": "BUY_FILL",
+  "fill_id": "f1", "premium_cash_delta_cents": -40000, "fee_cash_delta_cents": -65,
+  "net_cash_delta_cents": -40065, "balance_after_cents": 9959935
+}
+```
+
+Entry type `INITIAL_FUNDING`, `BUY_FILL`, or `SELL_FILL`; `fill_id` null only
+for initial funding. net = premium delta + fee delta; fee delta nonpositive. One
+funding entry per run and one ledger entry per fill. No deposits, withdrawals,
+or manual corrections.
+
+### J. Closed-trade record (accounting, immutable)
+
+```json
+{
+  "schema_version": "1.0", "closed_trade_id": "t1", "run_id": "r1", "position_id": "pos1",
+  "entry_fill_id": "f1", "exit_fill_id": "f2", "strategy_id": "sample_spy_long_call",
+  "strategy_version": "1.0.0", "opened_at": "2026-09-29T14:00:01Z",
+  "closed_at": "2026-09-29T14:10:01Z", "quantity": 1, "entry_cost_cents": 40065,
+  "exit_net_proceeds_cents": 47935, "total_fees_cents": 130, "realized_pnl_cents": 7870,
+  "exit_reason": "PROFIT_TARGET"
+}
+```
+
+Realized P&L = net proceeds − entry cost. One closed-trade record per position.
+
+Traceability: closed trade → fills → orders → risk decisions and proposals → input quotes.
+
+---
+
+## 6. Module interfaces
+
+| Owner | Interface | Result |
+|---|---|---|
+| Market data | `next_event(run_id, checkpoint)` | Next quote or session boundary |
+| Market data | `get_contract(contract_id)` | Immutable contract |
+| Strategy | `evaluate(event, account, position, strategy_config)` | Proposal or no action |
+| Risk | `evaluate(proposal, account, position, quote, policy)` | Persistable risk decision |
+| Broker | `submit(proposal_id, idempotency_key)` | Accepted or rejected order |
+| Broker | `on_quote(quote_id)` | Eligible fill candidates |
+| Broker | `cancel(order_id, idempotency_key)` | Order transition |
+| Accounting | `apply_fill(fill, transaction)` | Ledger and position changes |
+| Accounting | `reconcile(run_id)` | Pass/fail with discrepancies |
+| Query layer | `get_dashboard(run_id)` | Snapshot, positions, orders, history |
+| Coordinator | `start`, `step`, `pause`, `request_close` | Audited commands |
+
+`apply_fill` runs inside the coordinator's atomic transaction. Dashboard
+requests use command interfaces; they cannot write tables directly.
+
+---
+
+## 7. Worked sample trade (synthetic prices)
+
+| Event | Result |
+|---|---|
+| Start | Cash $100,000.00 |
+| 14:00:00 — q1 | SPY $600 vs $597 reference; call bid $3.90 / ask $4.00 |
+| Entry proposal | Buy one Oct 30 $600 call, limit $4.00 |
+| Risk approval | $400.65 required; below $1,000 ceiling |
+| Order accepted | Cash $100,000.00; available $99,599.35 |
+| 14:00:01 — q2 | Buy fills at $4.00 |
+| After entry | Cash $99,599.35; cost basis $400.65 |
+| Initial bid valuation | Position value $390.00; unrealized −$10.65 |
+| 14:10:00 — q3 | Bid $4.80 / ask $4.90 triggers profit target |
+| Exit proposal | Sell one contract, limit $4.80 |
+| 14:10:01 — q4 | Sell fills at $4.80 |
+| Final account | Cash and equity $100,078.70, no position |
+
+$100,000 − $400 − $0.65 + $480 − $0.65 = $100,078.70; realized P&L $78.70.
+Immediately after entry: $99,599.35 + $390 = $99,989.35 = $100,000 − $10.65.
+
+---
+
+## 8. Acceptance checklist
+
+| Check | Required outcome |
+|---|---|
+| Buy limit | $4.00 limit cannot fill at $4.01 ask |
+| Sell limit | $4.80 limit cannot fill at $4.79 bid |
+| Same-event execution | Proposal quote cannot fill its own order |
+| Quote integrity | Stale, future, crossed, duplicate, and out-of-order quotes cannot fill |
+| Liquidity | Insufficient or missing displayed size prevents fill |
+| Cash reservation | Pending orders cannot collectively exceed available funds |
+| Position reservation | Duplicate exits cannot sell more contracts than owned |
+| Cancellation | Releases reservation without changing cash |
+| Idempotency | Repeated command creates no duplicate order, fill, or ledger debit |
+| Risk rejection | Leaves cash and positions unchanged |
+| Round trip | Sample trade ends at $100,078.70 with $78.70 realized profit |
+| Ledger reconciliation | Cash equals the sum of all ledger deltas |
+| Equity reconciliation | Starting cash + realized + unrealized P&L = equity when valuation available |
+| Crash recovery | Crash before commit changes nothing; crash after commit cannot double-apply |
+| Deterministic replay | Same fixture and versions produce identical economic results |
+| Scope enforcement | Unsupported contracts and lifecycle events are rejected or pause the run |
+| Incomplete fixture | Open exposure remains visible; no fabricated closing P&L |
+
+---
+
+## 9. Implementation sequence
+
+1. Establish repository, configuration, schemas, migrations, and sample fixture.
+2. Implement ledger, reservations, and position accounting with reconciliation checks.
+3. Implement risk decisions and deterministic order execution.
+4. Connect strategy, replay clock, and restart recovery.
+5. Build dashboard and run the complete acceptance checklist.
+
+---
+
+## 10. Approved clarifications (take precedence)
+
+1. **Rejected entries.** After a rejected entry, enforce a 60-second
+   simulated-time cooldown per contract before proposing another entry. Do
+   not permanently disable the contract after a risk rejection.
+2. **Reference price.** Store the fixed session reference price in run/fixture
+   metadata. If a quote includes it, require an exact match.
+3. **Pending exits.** Do not generate another closing proposal while a closing
+   order is pending or open. Preserve the exit intent after cancellation or
+   expiration so it can retry on the next eligible quote.
+4. **Replay determinism.** Identical inputs and versions must produce identical
+   economic results and event ordering. Use deterministic event sequence
+   numbers within each run and globally unique record IDs. Different runs may
+   have different IDs.
+5. **Session times.** Store session boundaries as UTC timestamps and store
+   `America/New_York` as the session timezone. Derive local dates using that
+   timezone; never use a fixed UTC offset.
+6. **Account revision.** Increment `account_revision` whenever a committed
+   change affects cash, positions, or cash/contract reservations — including
+   order acceptance, cancellation, expiration, and fills, not only ledger
+   entries. The increment commits in the same transaction as the change.
+   Risk approvals record the revision they evaluated; order acceptance must
+   atomically (inside one `BEGIN IMMEDIATE` transaction) recheck that revision
+   and revalidate available cash and available (unreserved) contracts before
+   committing the order and its reservation. A mismatch rejects with
+   `STALE_ACCOUNT_REVISION`.
+7. **Milestone numbering.** Step 3 is the project foundation (repository,
+   backend, database, read-only dashboard). Step 4 is sample-data mode
+   (versioned synthetic fixture, fixture loading, quote validation, replay
+   clock, and event sequencing). Step 5 is the complete trading workflow
+   (strategy, risk, order acceptance and reservations, fills, position and
+   fill accounting, closed trades, and restart recovery).
+
+---
+
+## 11. Implementation resolutions (Step 3)
+
+Contradictions and gaps found while implementing, and how they were resolved.
+
+1. **Quote `session_reference_cents` required vs. optional.** Section 5B says
+   every quote field is required; clarification 2 says "if a quote includes
+   it". Clarification wins: the field is optional (may be omitted or `null`)
+   on a quote; when present it must equal the run's stored reference exactly.
+   The quote model validates shape; the exact-match check needs the run and
+   belongs to quote ingestion (Step 4).
+2. **Run fixture metadata before a fixture exists.** A run must pin its fixture
+   version, checksum, and session reference price, but the fixture is built in
+   Step 4. These run columns are nullable while the run is `READY` and a
+   database CHECK requires them for every other status, so a run cannot start
+   without them.
+3. **Account record.** The spec references `account_id` but defines no Account
+   schema. Added a minimal `Account` (one per run in the MVP) holding currency,
+   starting cash, and `account_revision`. Cash is never stored on it; cash is
+   the sum of ledger deltas.
+4. **Account revision.** Starts at 1 when the initial funding commits, then
+   follows clarification 6. This matches the examples (risk decision at
+   revision 1, snapshot at revision 3 after reservation and fill). In Step 3
+   initialization is the only state change; the database already rejects any
+   revision that does not increase. The focused test that reservation changes
+   bump the revision is added in Step 5 with the reservation code.
+5. **Snapshot identity.** Snapshots are computed on read, not stored as cash
+   truth. `snapshot_id` is derived as `<account_id>:r<revision>`, which is
+   globally unique because account IDs are. The `account_snapshots` table
+   exists for later checkpointing.
+6. **Funding timestamp.** The initial-funding ledger entry is recorded at the
+   run's simulated session start (not wall-clock time) so identical inputs
+   produce identical economic records.
+7. **Watchlist.** The MVP only permits `SPY`; configuration naming other
+   symbols is rejected rather than silently ignored.
+8. **Initialization idempotency.** Initialization is a command with an
+   idempotency key (the configured sample-run key). Same key and same
+   parameters return the existing run; same key and different parameters is
+   a conflict — change the key to create a new run.
+9. **Rejection cooldown storage.** The 60-second cooldown (clarification 1) is
+   derivable from persisted risk decisions and proposals; no extra table is
+   added in Step 3.
+10. **Step numbering.** See clarification 7. Section 9's original sequence
+    is superseded by it.
