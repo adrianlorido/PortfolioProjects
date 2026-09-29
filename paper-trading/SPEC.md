@@ -615,3 +615,99 @@ Contradictions and gaps found while implementing, and how they were resolved.
 12. **HTTP loading.** The API loads only fixtures bundled in
     `paper-trading/fixtures/`, by id. Test fixtures and arbitrary paths are
     CLI-only.
+
+---
+
+## 13. Implementation resolutions (Step 5: trading workflow)
+
+No approved trading or accounting rule was changed. The worked example
+reproduces exactly: entry 1 @ $4.00 + $0.65, exit 1 @ $4.80 − $0.65, realized
+$78.70, final cash and equity $100,078.70, no open position or reservations.
+The account revision reaches 2 at acceptance and 3 at the entry fill, matching
+records D and H. The points below are interpretations where the spec was
+silent or ambiguous; items 1–4 are flagged for review.
+
+1. **Entry rule 11 (cash and risk ceiling) is enforced by the risk decision,
+   not pre-filtered by the strategy (flagged).** Section 2 lists it as an
+   entry rule, while clarification 1 presumes entries can be rejected. The
+   strategy proposes; `risk_v1` rejects with `INSUFFICIENT_CASH`/`RISK_LIMIT`,
+   which is persisted and starts the 60-second cooldown. Either way no order
+   is created. This way the rejection is auditable.
+2. **Revision granularity (flagged).** Clarification 6 is applied per
+   committed operation: order acceptance, fill, cancellation, and expiration
+   each increment `account_revision` once. Marking a position to market
+   changes valuation only (not cash, holdings, or reservations) and does not
+   increment it. This reproduces records D (revision 1 at approval) and H
+   (revision 3 after acceptance and fill).
+3. **Orders exist only for approved decisions (flagged).** A risk-rejected
+   proposal creates no order. `PENDING → REJECTED` is used when acceptance
+   revalidation fails (`STALE_ACCOUNT_REVISION`, `INSUFFICIENT_CASH`,
+   `POSITION_LIMIT`, `INSUFFICIENT_POSITION`). Both kinds of entry rejection
+   start the cooldown.
+4. **Closed-trade `exit_reason` (flagged).** The originating exit intent's
+   reason (`PROFIT_TARGET`, `LOSS_THRESHOLD`, `TIME_EXIT`, `MANUAL_CLOSE`) is
+   recorded, even when the filling order came from an `EXIT_RETRY`
+   proposal. Retries remain visible on the proposals.
+5. **Exits are evaluated on the fill quote too.** Per the required event
+   order, the strategy runs after fills on the same event, so a position
+   opened by quote *n* can trigger its exit rule on quote *n*. The resulting
+   closing order still cannot fill on quote *n*.
+6. **Exit intent.** Created once, by the first triggered rule or a user close
+   request. It is persisted in `exit_intents`, survives cancellation,
+   expiration, and restart, and is resolved only by the closing fill. While
+   a closing order is `PENDING`/`OPEN`, no closing proposal is made. Later
+   proposals for the same intent use `EXIT_RETRY` and the current bid as the
+   limit. A bid of 0 (a sell limit must be positive) or a stale quote defers
+   the proposal to the next valid quote.
+7. **Manual close.** `request-close` records a `MANUAL_CLOSE` intent. If the
+   latest accepted quote for the contract is current (≤ 2 s old on the
+   simulated clock), the proposal is made immediately from it; otherwise on
+   the next valid quote. Canceling a closing order does not cancel the
+   intent.
+8. **Contract selection** uses the fixture's contracts. The selected
+   contract must have its own current accepted quote; the entry underlying
+   price comes from the event quote.
+9. **Expiration timing.** `expires_at = submitted_at + 60 s`. At each event,
+   orders with `expires_at <= event time` expire before the quote is
+   processed; their `updated_at` is the effective expiry time, even when the
+   fixture jumps forward. `fill_price` independently refuses fills at or
+   after `expires_at`.
+10. **Session end.** At `SESSION_CLOSE` remaining `OPEN` orders expire with
+    reason `SESSION_END` and release their reservations. After the last event
+    the run is `COMPLETED` if flat, else `INCOMPLETE` with the open exposure
+    recorded; the position keeps its last bid mark labeled `STALE`. No fill
+    or realized P&L is invented.
+11. **Run lifecycle.** Runs are either trading-enabled (new flag, fixed at
+    creation) or replay-only (all Step 3/4 runs; they never leave `READY`).
+    Trading runs go `READY → RUNNING` via `start` (fixture loaded, books
+    reconciled), `RUNNING ↔ PAUSED` via pause/resume, and `RUNNING →
+    COMPLETED/INCOMPLETE` at the end. The database enforces these transitions.
+12. **Reconciliation and recovery.** Trading runs reconcile before every event
+    and inside every event's transaction before commit, and the server
+    reconciles every `RUNNING` trading run at startup.
+    - A failure before an event pauses the run (reason recorded,
+      `RECONCILIATION_FAILED` event).
+    - An event whose result would not reconcile is rolled back entirely, and
+      the run is paused.
+    - Resume is refused until the books reconcile.
+    - Reconciliation covers: the ledger chain; each fill ↔ its ledger entry;
+      one fill per `FILLED` order; open-order reservations equal to
+      limit × multiplier × qty + fee (buys) or qty (sells); position reserved
+      contracts equal to open closing orders; position cost basis equal to
+      entry premium + fee; closed trades equal to their fills; and equity =
+      starting cash + realized + unrealized.
+13. **Execution guards in the database.** A fill must come from a quote after
+    the order's generating quote, not observed before submission, for the
+    same contract and run, for the full order quantity, and within displayed
+    size not already consumed by earlier fills on that quote. Its price must
+    be the ask ≤ limit (buy) or the bid ≥ limit (sell). Proposals and risk
+    decisions are immutable; order terms and position entry facts cannot
+    change; closed positions are final.
+14. **Proposal idempotency key.** `<run>:<intent>:after-event-<n>`, where n is
+    the last committed run event. It is deterministic and unique, since at
+    most one proposal is made per committed event. Order keys are
+    `<run>:order:<proposal>`, so resubmitting a proposal returns the original
+    order.
+15. **Display of corrupted records.** If stored rows no longer satisfy the
+    record invariants, the dashboard still renders them as stored, with
+    reconciliation marked `FAILED`, instead of failing the page.

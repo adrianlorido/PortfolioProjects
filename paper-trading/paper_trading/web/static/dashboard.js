@@ -49,6 +49,13 @@
     });
   }
 
+  var ENDPOINTS = {
+    load: "replay/load", step: "replay/step", pause: "replay/pause", resume: "replay/resume",
+    "run-to-end": "replay/run-to-end", start: "trading/start", "request-close": "trading/request-close",
+    cancel: "trading/cancel",
+  };
+  var head = document.getElementById("page-head");
+  var runKey = head ? head.getAttribute("data-run-key") : "";
   var msg = document.getElementById("command-msg");
   document.querySelectorAll("[data-command]").forEach(function (el) {
     el.addEventListener("click", function () {
@@ -56,11 +63,12 @@
       var body = command === "load"
         ? { fixture_id: el.getAttribute("data-fixture-id") }
         : { idempotency_key: newKey() };
+      if (command === "cancel") body.order_id = el.getAttribute("data-order-id");
       var enabled = Array.prototype.filter.call(
         document.querySelectorAll("[data-command]"), function (b) { return !b.disabled; });
       enabled.forEach(function (b) { b.disabled = true; });
       if (msg) { msg.className = "command-msg muted small"; msg.textContent = "Sending " + command + "…"; }
-      post("/api/replay/" + command, body, 2)
+      post("/api/" + ENDPOINTS[command] + "?run=" + encodeURIComponent(runKey), body, 2)
         .then(function (r) {
           return r.json().then(function (data) {
             if (!r.ok) {
@@ -84,7 +92,7 @@
   btn.addEventListener("click", function () {
     btn.disabled = true;
     btn.textContent = "Refreshing…";
-    fetch("/api/account", { headers: { Accept: "application/json" } })
+    fetch("/api/account?run=" + encodeURIComponent(runKey), { headers: { Accept: "application/json" } })
       .then(function (r) {
         if (!r.ok) throw new Error("HTTP " + r.status);
         return r.json();

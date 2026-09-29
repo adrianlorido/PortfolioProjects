@@ -2,12 +2,15 @@
 {% block title %}Dashboard{% endblock %}
 {% block content %}
 {% set s = d.snapshot %}
-<header class="page-head">
+{% set is_trading = d.run.trading_enabled %}
+{% set open_positions = d.positions | selectattr('status', 'equalto', 'OPEN') | list %}
+<header class="page-head" data-run-key="{{ run_key }}" id="page-head">
   <div>
     <h1>Options Paper Trading</h1>
     <p class="muted">
-      Run <code>{{ d.run.run_id }}</code> ·
-      status <span class="pill pill-{{ d.run.status | lower }}">{{ d.run.status }}</span> ·
+      Run <code>{{ d.run.init_key }}</code> <span class="muted small">(<code>{{ d.run.run_id }}</code>)</span>
+      <span class="pill {{ 'pill-trading' if is_trading else 'pill-replay' }}">{{ 'TRADING RUN' if is_trading else 'REPLAY-ONLY RUN' }}</span>
+      status <span class="pill pill-{{ d.run.status | lower }}" id="run-status">{{ d.run.status }}</span> ·
       mode <strong>{{ d.run.mode }}</strong>
     </p>
   </div>
@@ -20,6 +23,30 @@
   </div>
 </header>
 
+{% if d.runs | length > 1 %}
+<nav class="run-switcher" aria-label="Runs">
+  <span class="muted small">Runs:</span>
+  {% for x in d.runs %}
+  <a href="/?run={{ x.init_key | urlencode }}" {{ 'aria-current=page' if x.init_key == run_key }}
+     class="{{ 'current' if x.init_key == run_key }}">{{ x.init_key }}
+    <span class="muted small">{{ 'trading' if x.trading_enabled else 'replay-only' }} · {{ x.status }}</span></a>
+  {% endfor %}
+</nav>
+{% endif %}
+
+{% if d.run.status in ('COMPLETED', 'INCOMPLETE') %}
+<section class="panel outcome outcome-{{ d.run.status | lower }}" aria-labelledby="outcome-h">
+  <h2 id="outcome-h">Run {{ d.run.status }}</h2>
+  <p>{{ d.run.status_reason }}</p>
+  {% if d.run.status == 'INCOMPLETE' %}
+  <p><strong>Open exposure remains.</strong> No closing fill or realized profit was invented; the position below keeps
+    its last bid mark, labeled with its valuation status.</p>
+  {% endif %}
+</section>
+{% elif d.run.status == 'PAUSED' and d.run.status_reason %}
+<section class="panel outcome outcome-paused"><h2>Run paused</h2><p>{{ d.run.status_reason }}</p></section>
+{% endif %}
+
 <section aria-labelledby="acct-h">
   <h2 id="acct-h">Account <span class="muted small">as of {{ s.as_of }} (simulated) · revision <span data-field="account_revision">{{ s.account_revision }}</span></span></h2>
   <div class="metrics">
@@ -30,20 +57,22 @@
       <span class="note">Sum of ledger entries</span></div>
     <div class="metric"><span class="label">Reserved cash</span>
       <span class="value" data-field="reserved_cash_cents">{{ s.reserved_cash_cents | usd }}</span>
-      <span class="note">Held by open buy orders</span></div>
+      <span class="note">Open buy orders: limit × 100 × qty + fee</span></div>
     <div class="metric"><span class="label">Available cash</span>
-      <span class="value" data-field="available_cash_cents">{{ s.available_cash_cents | usd }}</span></div>
+      <span class="value" data-field="available_cash_cents">{{ s.available_cash_cents | usd }}</span>
+      <span class="note">Cash − reserved</span></div>
     <div class="metric"><span class="label">Equity</span>
       <span class="value" data-field="equity_cents">{{ s.equity_cents | usd }}</span>
-      <span class="note">Valuation: <span data-field="valuation_status">{{ s.valuation_status }}</span></span></div>
+      <span class="note">Cash + market value · valuation <span data-field="valuation_status">{{ s.valuation_status }}</span></span></div>
     <div class="metric"><span class="label">Realized P&amp;L</span>
       <span class="value" data-field="realized_pnl_cents" data-signed>{{ s.realized_pnl_cents | usd_signed }}</span>
-      <span class="note">Includes fees</span></div>
+      <span class="note">Includes entry and exit fees</span></div>
     <div class="metric"><span class="label">Unrealized P&amp;L</span>
       <span class="value" data-field="unrealized_pnl_cents" data-signed>{{ s.unrealized_pnl_cents | usd_signed }}</span>
       <span class="note">Marked at bid; excludes exit fee</span></div>
     <div class="metric"><span class="label">Fees paid</span>
-      <span class="value" data-field="fees_paid_cents">{{ s.fees_paid_cents | usd }}</span></div>
+      <span class="value" data-field="fees_paid_cents">{{ s.fees_paid_cents | usd }}</span>
+      <span class="note">$0.65 per contract per fill</span></div>
   </div>
 </section>
 
@@ -68,18 +97,21 @@
       {% else %}None — all fixture events replayed{% endif %}</dd>
     <dt>Reference price</dt><dd>{{ r.session_reference_cents | usd }} (fixed session reference)</dd>
   </dl>
-  {% if r.status == 'EXHAUSTED' %}
+  {% if r.status == 'EXHAUSTED' and not is_trading %}
   <p class="notice">Replay exhausted: every fixture event was processed. No trading workflow ran,
     so this is <strong>not</strong> a completed demonstration trade.</p>
+  {% elif is_trading and d.run.status == 'READY' %}
+  <p class="notice">Trading run not started. Start it to replay the fixture through the trading workflow.</p>
   {% endif %}
+  {% set can_step = r.status == 'ACTIVE' and (not is_trading or d.run.status == 'RUNNING') %}
   <div class="controls">
-    <button type="button" data-command="step" {{ 'disabled' if r.status != 'ACTIVE' }}>Step one event</button>
+    <button type="button" data-command="step" {{ 'disabled' if not can_step }}>Step one event</button>
     {% if r.status == 'PAUSED' %}
     <button type="button" data-command="resume">Resume</button>
     {% else %}
-    <button type="button" data-command="pause" {{ 'disabled' if r.status != 'ACTIVE' }}>Pause</button>
+    <button type="button" data-command="pause" {{ 'disabled' if not can_step }}>Pause</button>
     {% endif %}
-    <button type="button" data-command="run-to-end" {{ 'disabled' if r.status != 'ACTIVE' }}>Replay to end</button>
+    <button type="button" data-command="run-to-end" {{ 'disabled' if not can_step }}>Replay to end</button>
   </div>
   {% else %}
   <p>No fixture loaded. Load the bundled synthetic fixture to replay the SPEC.md worked-example quotes.</p>
@@ -88,6 +120,27 @@
   </div>
   {% endif %}
   <p class="command-msg muted small" id="command-msg" role="status" aria-live="polite"></p>
+</section>
+
+<section class="panel" aria-labelledby="ctl-h">
+  <h2 id="ctl-h">Trading controls</h2>
+  {% if is_trading %}
+  <div class="controls">
+    <button type="button" data-command="start" {{ 'disabled' if d.run.status != 'READY' or not r }}>Start trading run</button>
+    <button type="button" data-command="request-close"
+      {{ 'disabled' if not open_positions or d.run.status not in ('RUNNING', 'PAUSED') }}>Request close (manual exit)</button>
+  </div>
+  <p class="muted small">Strategy <code>{{ d.run.strategy_id }}</code> v{{ d.run.strategy_version }} —
+    <strong>demonstration rules only; not a tested or profitable strategy.</strong>
+    Cancel an open order from the Orders table. Canceling a closing order keeps the exit intent, which retries on the next valid quote.</p>
+  {% else %}
+  <div class="controls">
+    <button type="button" disabled>Start trading — replay-only run</button>
+    <button type="button" disabled>Request close — replay-only run</button>
+  </div>
+  <p class="muted small">This run was created for replay only (Step 4) and never trades. Create a trading run with
+    <code>python -m paper_trading --run-key trading-demo-001 init-sample --trading</code>.</p>
+  {% endif %}
 </section>
 
 <div class="two-col">
@@ -118,24 +171,114 @@
   </section>
 </div>
 
+<section class="panel" aria-labelledby="pos-h">
+  <h2 id="pos-h">Positions</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Contract</th><th>Status</th><th class="num">Qty</th><th class="num">Reserved</th><th class="num">Entry</th>
+      <th class="num">Cost basis</th><th class="num">Market value</th><th class="num">Unrealized</th><th>Valuation</th><th>Exit intent</th></tr></thead>
+    <tbody>
+    {% for p in d.positions %}
+      {% set intent = d.exit_intents | selectattr('position_id', 'equalto', p.position_id) | first %}
+      <tr><td><code>{{ p.contract_id }}</code></td><td>{{ p.status }}</td><td class="num">{{ p.quantity }}</td>
+        <td class="num">{{ p.reserved_contracts }}</td>
+        <td class="num">{{ p.entry_price_cents | usd }}</td><td class="num">{{ p.remaining_cost_basis_cents | usd }}</td>
+        <td class="num">{{ p.market_value_cents | usd }}</td><td class="num">{{ p.unrealized_pnl_cents | usd_signed }}</td>
+        <td><span class="pill {{ 'pill-bad' if p.valuation_status != 'CURRENT' else '' }}">{{ p.valuation_status }}</span></td>
+        <td>{% if intent %}{{ intent.reason_code }}{{ ' (resolved)' if intent.resolved_at }}{% endif %}</td></tr>
+    {% else %}
+      <tr class="empty"><td colspan="10">No positions.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <p class="muted small">Valuation: market value = latest valid bid × 100 × quantity; unrealized P&amp;L = market value − cost basis
+    (entry premium + entry fee), excluding the prospective exit fee. A mark older than 2 simulated seconds is kept and labeled STALE, never replaced with zero.</p>
+</section>
+
+<section class="panel" aria-labelledby="ord-h">
+  <h2 id="ord-h">Orders</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th><span class="sr-only">Action</span></th><th>Submitted</th><th>Intent</th><th class="num">Qty</th><th class="num">Limit</th>
+      <th>Status</th><th class="num">Reserved cash</th><th class="num">Reserved contracts</th><th>Expires</th><th>Reason</th></tr></thead>
+    <tbody>
+    {% for o in d.orders %}
+      <tr><td>{% if o.status == 'OPEN' and is_trading %}<button type="button" data-command="cancel" data-order-id="{{ o.order_id }}">Cancel</button>{% endif %}</td>
+        <td>{{ o.submitted_at }}</td><td>{{ o.intent }}</td>
+        <td class="num">{{ o.quantity }}</td><td class="num">{{ o.limit_cents | usd }}</td><td>{{ o.status }}</td>
+        <td class="num">{{ o.reserved_cash_cents | usd }}</td><td class="num">{{ o.reserved_contracts }}</td>
+        <td>{{ o.expires_at }}</td><td>{{ o.terminal_reason or '' }}</td></tr>
+    {% else %}
+      <tr class="empty"><td colspan="10">No orders.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+
+<section class="panel" aria-labelledby="prop-h">
+  <h2 id="prop-h">Proposals and risk decisions</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Time</th><th>Intent</th><th>Reason</th><th class="num">Limit</th><th class="num">Quote seq</th>
+      <th>Risk</th><th class="num">Required cash</th><th class="num">Revision</th><th>Order</th></tr></thead>
+    <tbody>
+    {% for p in d.proposals %}
+      <tr><td>{{ p.created_at }}</td><td>{{ p.intent }}</td><td title="{{ p.reason }}">{{ p.reason_code }}</td>
+        <td class="num">{{ p.limit_cents | usd }}</td><td class="num">{{ p.quote_source_sequence }}</td>
+        <td><span class="pill {{ 'pill-ok' if p.decision == 'APPROVED' else 'pill-bad' }}">{{ p.decision }}</span>
+          {{ p.risk_reason_codes | join(', ') }}</td>
+        <td class="num">{{ p.required_cash_cents | usd }}</td><td class="num">{{ p.account_revision }}</td>
+        <td>{% if p.order_id %}{{ p.order_status }}{{ ' (' ~ p.terminal_reason ~ ')' if p.terminal_reason }}{% else %}—{% endif %}</td></tr>
+    {% else %}
+      <tr class="empty"><td colspan="9">No proposals.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+
+<section class="panel" aria-labelledby="fill-h">
+  <h2 id="fill-h">Fills</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Filled (simulated)</th><th>Intent</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Gross</th>
+      <th class="num">Fee</th><th class="num">Cash change</th><th class="num">Balance after</th><th class="num">Quote seq</th></tr></thead>
+    <tbody>
+    {% for f in d.fills %}
+      <tr><td>{{ f.filled_at }}</td><td>{{ f.intent }}</td><td class="num">{{ f.quantity }}</td>
+        <td class="num">{{ f.price_cents | usd }}</td><td class="num">{{ f.gross_cents | usd }}</td>
+        <td class="num">{{ f.fee_cents | usd }}</td><td class="num">{{ f.net_cash_delta_cents | usd_signed }}</td>
+        <td class="num">{{ f.balance_after_cents | usd }}</td><td class="num">{{ f.quote_source_sequence }}</td></tr>
+    {% else %}
+      <tr class="empty"><td colspan="9">No fills.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+
+<section class="panel" aria-labelledby="hist-h">
+  <h2 id="hist-h">Trade history</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Closed</th><th>Opened</th><th class="num">Qty</th><th class="num">Entry cost</th>
+      <th class="num">Exit proceeds</th><th class="num">Fees</th><th class="num">Realized</th><th>Exit reason</th></tr></thead>
+    <tbody>
+    {% for t in d.closed_trades %}
+      <tr><td>{{ t.closed_at }}</td><td>{{ t.opened_at }}</td><td class="num">{{ t.quantity }}</td>
+        <td class="num">{{ t.entry_cost_cents | usd }}</td><td class="num">{{ t.exit_net_proceeds_cents | usd }}</td>
+        <td class="num">{{ t.total_fees_cents | usd }}</td><td class="num">{{ t.realized_pnl_cents | usd_signed }}</td>
+        <td>{{ t.exit_reason }}</td></tr>
+    {% else %}
+      <tr class="empty"><td colspan="8">No closed trades.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+
 <section class="panel" aria-labelledby="run-h">
   <h2 id="run-h">Run parameters</h2>
   <dl class="kv">
     <dt>Session</dt><dd>{{ d.session_local_date }} ({{ d.run.session_timezone }})
       <span class="muted small">{{ d.run.session_start }} → {{ d.run.session_end }}</span></dd>
-    <dt>Strategy</dt><dd>{{ d.run.strategy_id }} v{{ d.run.strategy_version }}</dd>
-    <dt>Risk ceiling</dt><dd>{{ d.run.entry_risk_limit_cents | usd }} per entry</dd>
+    <dt>Strategy</dt><dd>{{ d.run.strategy_id }} v{{ d.run.strategy_version }} (demonstration rules)</dd>
+    <dt>Risk ceiling</dt><dd>{{ d.run.entry_risk_limit_cents | usd }} per entry (entry premium + fee)</dd>
     <dt>Fees</dt><dd>{{ d.run.fee_per_contract_cents | usd }} per contract per fill ({{ d.run.fee_schedule_version }})</dd>
+    <dt>Execution</dt><dd>{{ d.run.execution_model_version }}: buy at ask ≤ limit, sell at bid ≥ limit, next quote only, full displayed size, 60 s TTL</dd>
   </dl>
-</section>
-
-<section class="panel" aria-labelledby="ctl-h">
-  <h2 id="ctl-h">Trading controls</h2>
-  <div class="controls">
-    <button type="button" disabled>Start trading — Not implemented</button>
-    <button type="button" disabled>Request close — Not implemented</button>
-  </div>
-  <p class="muted small">The trading workflow arrives in Step 5. Replay creates no proposals, orders, fills, or positions.</p>
 </section>
 
 <section class="panel" aria-labelledby="tl-h">
@@ -169,59 +312,6 @@
         <td><details><summary>show</summary><pre class="raw">{{ x.raw_input | tojson(indent=2) }}</pre></details></td></tr>
     {% else %}
       <tr class="empty"><td colspan="5">No rejected inputs.</td></tr>
-    {% endfor %}
-    </tbody>
-  </table></div>
-</section>
-
-<section class="panel" aria-labelledby="pos-h">
-  <h2 id="pos-h">Positions</h2>
-  <div class="table-wrap"><table>
-    <thead><tr><th>Contract</th><th>Status</th><th class="num">Qty</th><th class="num">Entry</th>
-      <th class="num">Cost basis</th><th class="num">Market value</th><th class="num">Unrealized</th><th>Valuation</th></tr></thead>
-    <tbody>
-    {% for p in d.positions %}
-      <tr><td><code>{{ p.contract_id }}</code></td><td>{{ p.status }}</td><td class="num">{{ p.quantity }}</td>
-        <td class="num">{{ p.entry_price_cents | usd }}</td><td class="num">{{ p.remaining_cost_basis_cents | usd }}</td>
-        <td class="num">{{ p.market_value_cents | usd }}</td><td class="num">{{ p.unrealized_pnl_cents | usd_signed }}</td>
-        <td>{{ p.valuation_status }}</td></tr>
-    {% else %}
-      <tr class="empty"><td colspan="8">No positions.</td></tr>
-    {% endfor %}
-    </tbody>
-  </table></div>
-</section>
-
-<section class="panel" aria-labelledby="ord-h">
-  <h2 id="ord-h">Orders</h2>
-  <div class="table-wrap"><table>
-    <thead><tr><th>Submitted</th><th>Intent</th><th>Contract</th><th class="num">Qty</th><th class="num">Limit</th>
-      <th>Status</th><th class="num">Reserved</th><th>Reason</th></tr></thead>
-    <tbody>
-    {% for o in d.orders %}
-      <tr><td>{{ o.submitted_at }}</td><td>{{ o.intent }}</td><td><code>{{ o.contract_id }}</code></td>
-        <td class="num">{{ o.quantity }}</td><td class="num">{{ o.limit_cents | usd }}</td><td>{{ o.status }}</td>
-        <td class="num">{{ o.reserved_cash_cents | usd }}</td><td>{{ o.terminal_reason or '' }}</td></tr>
-    {% else %}
-      <tr class="empty"><td colspan="8">No orders.</td></tr>
-    {% endfor %}
-    </tbody>
-  </table></div>
-</section>
-
-<section class="panel" aria-labelledby="hist-h">
-  <h2 id="hist-h">Trade history</h2>
-  <div class="table-wrap"><table>
-    <thead><tr><th>Closed</th><th>Opened</th><th class="num">Qty</th><th class="num">Entry cost</th>
-      <th class="num">Exit proceeds</th><th class="num">Fees</th><th class="num">Realized</th><th>Exit reason</th></tr></thead>
-    <tbody>
-    {% for t in d.closed_trades %}
-      <tr><td>{{ t.closed_at }}</td><td>{{ t.opened_at }}</td><td class="num">{{ t.quantity }}</td>
-        <td class="num">{{ t.entry_cost_cents | usd }}</td><td class="num">{{ t.exit_net_proceeds_cents | usd }}</td>
-        <td class="num">{{ t.total_fees_cents | usd }}</td><td class="num">{{ t.realized_pnl_cents | usd_signed }}</td>
-        <td>{{ t.exit_reason }}</td></tr>
-    {% else %}
-      <tr class="empty"><td colspan="8">No closed trades.</td></tr>
     {% endfor %}
     </tbody>
   </table></div>

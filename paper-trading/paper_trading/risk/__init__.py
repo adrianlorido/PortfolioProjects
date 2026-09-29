@@ -1,11 +1,9 @@
-"""Risk boundary (not implemented; arrives in Step 5).
+"""Risk (Step 5): policy ``risk_v1``.
 
-Policy ``risk_v1``. Checks proposals and records approval or rejection; cannot
-execute. Approvals bind to an ``account_revision`` that the broker rechecks.
-
-Planned interface::
-
-    evaluate(proposal, account, position, quote, policy) -> RiskDecision
+Checks proposals and records approval or rejection; cannot execute. See
+``policy.py`` for the rules and reason codes. Approvals bind to an
+``account_revision`` that the broker rechecks atomically at acceptance.
 """
 
 from paper_trading.risk.interface import RiskEvaluator  # noqa: F401
+from paper_trading.risk.policy import POLICY_VERSION, RiskInputs, RiskVerdict, evaluate  # noqa: F401

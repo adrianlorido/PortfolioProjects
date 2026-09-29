@@ -141,10 +141,46 @@ def test_step3_database_upgrades_without_losing_data(tmp_path, monkeypatch):
     monkeypatch.undo()
 
     refused = cli(["load-fixture"], env)
-    assert refused.returncode == 2 and "pending migrations [2]" in refused.stderr
+    pending = list(range(2, len(migrator.discover()) + 1))
+    assert refused.returncode == 2 and f"pending migrations {pending}" in refused.stderr
 
     migrated = cli(["migrate"], env)
-    assert migrated.returncode == 0 and "Applied migrations: [2]" in migrated.stdout
+    assert migrated.returncode == 0 and f"Applied migrations: {pending}" in migrated.stdout
     summary = cli(["status"], env).stdout
     assert result.run_id in summary and "cash $100,000.00" in summary and "PASS" in summary
     assert cli(["load-fixture"], env).returncode == 0
+
+
+def test_trading_demo_across_process_restarts(tmp_path):
+    """The README demo: every command is a new process; the server restarts mid-run."""
+    db = tmp_path / "trading.sqlite3"
+    port = free_port()
+    env = env_for(db, port)
+    k = ["--run-key", "trading-demo-001"]
+
+    created = cli(k + ["init-sample", "--trading"], env)
+    assert created.returncode == 0 and "trading, key trading-demo-001" in created.stdout
+    assert cli(k + ["load-fixture"], env).returncode == 0
+    assert '"run_status": "RUNNING"' in cli(k + ["start"], env).stdout
+    for i in range(2):   # SESSION_OPEN, q1 (entry order accepted)
+        assert cli(k + ["step", "--key", f"s{i}"], env).returncode == 0
+
+    (account, orders) = serve_and_read(env, port, "/api/account?run=trading-demo-001",
+                                       "/api/orders?run=trading-demo-001")
+    assert account["snapshot"]["reserved_cash_cents"] == 40_065 and orders[0]["status"] == "OPEN"
+
+    retry = cli(k + ["step", "--key", "s1"], env)          # retried command after restarts
+    assert '"idempotent_replay": true' in retry.stdout
+    assert cli(k + ["replay-to-end"], env).returncode == 0
+
+    summary = cli(k + ["status"], env).stdout
+    assert "[COMPLETED] trading" in summary and "cash $100,078.70" in summary and "equity $100,078.70" in summary
+    assert "realized $78.70" in summary and "reserved $0.00" in summary and "reconciliation: PASS" in summary
+    trades = cli(k + ["trades"], env).stdout
+    assert "PROFIT_TARGET: entry cost $400.65 exit net $479.35 fees $1.30 realized $78.70" in trades
+    assert trades.count("order FILLED") == 2
+
+    # The default replay-only run is untouched and still cannot trade.
+    assert cli(["init-sample"], env).returncode == 0
+    refused = cli(["start"], env)
+    assert refused.returncode == 2 and "replay-only" in refused.stderr

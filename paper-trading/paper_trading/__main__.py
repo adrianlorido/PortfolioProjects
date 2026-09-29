@@ -14,6 +14,16 @@ Sample-data replay (Step 4):
   replay-status     Show replay progress, latest accepted quote, and rejections.
   fixture-checksum  Print the checksum a fixture file should declare.
 
+Trading runs (Step 5):
+  init-sample --trading   Create a trading-enabled run (use a new --run-key).
+  start                   READY -> RUNNING (fixture loaded, books reconciled).
+  request-close           Manual close of the open position (exit intent persists).
+  cancel ORDER_ID         Cancel an OPEN order and release its reservation.
+  trades                  Proposals, risk decisions, orders, fills, positions,
+                          closed trades, and ledger for the run.
+
+Global option --run-key KEY selects the run (default: PAPER_SAMPLE_RUN_KEY).
+
 Replay commands accept --key; repeating a command with the same key returns
 the original result instead of running it again. Without --key a new key is
 generated, so each invocation is a new command.
@@ -30,8 +40,9 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from paper_trading.accounting import compute_snapshot, reconcile
-from paper_trading.app import queries, replay
+from paper_trading.app import queries, replay, trading
 from paper_trading.app.coordinator import IdempotencyConflictError, init_sample
+from paper_trading.broker.paper import OrderNotFoundError, OrderNotOpenError
 from paper_trading.config import get_settings
 from paper_trading.market_data.fixtures import (
     DEFAULT_FIXTURE_ID,
@@ -64,13 +75,14 @@ def _cmd_migrate(settings, args) -> int:
 def _cmd_init(settings, args) -> int:
     conn = connect(settings.db_path, create=True)
     try:
-        result = init_sample(conn, settings)
+        result = init_sample(conn, settings, trading=args.trading)
         rec = reconcile(conn, result.run_id)
         snap = compute_snapshot(conn, result.account_id)
     finally:
         conn.close()
     verb = "Created" if result.created else "Already initialized; reused"
-    print(f"{verb} sample run {result.run_id}")
+    kind = "trading" if args.trading else "replay-only"
+    print(f"{verb} sample run {result.run_id} ({kind}, key {settings.sample_run_key})")
     print(f"  database:        {settings.db_path}")
     print(f"  account:         {result.account_id}")
     print(f"  cash (ledger):   {format_cents(snap.cash_cents)}")
@@ -108,11 +120,17 @@ def _cmd_status(settings, args) -> int:
         account = queries.get_account(conn, run.run_id)
         snap = compute_snapshot(conn, account.account_id)
         rec = reconcile(conn, run.run_id)
-        print(f"schema version {version}; run {run.run_id} [{run.status}] mode {run.mode}")
+        kind = "trading" if run.trading_enabled else "replay-only"
+        print(f"schema version {version}; run {run.run_id} key {run.init_key} [{run.status}] {kind} mode {run.mode}")
+        if run.status_reason:
+            print(f"  status reason: {run.status_reason}")
         print(f"  watchlist: {', '.join(run.watchlist)}")
         print(f"  starting cash {format_cents(snap.starting_cash_cents)}  cash {format_cents(snap.cash_cents)}  "
               f"available {format_cents(snap.available_cash_cents)}  equity {format_cents(snap.equity_cents)}  "
               f"revision {snap.account_revision}")
+        print(f"  reserved {format_cents(snap.reserved_cash_cents)}  realized {format_cents(snap.realized_pnl_cents)}  "
+              f"unrealized {format_cents(snap.unrealized_pnl_cents)} (bid marks, excl. exit fee)  "
+              f"fees {format_cents(snap.fees_paid_cents)}  valuation {snap.valuation_status}")
         _print_replay(conn, run.run_id)
         print(f"  reconciliation: {'PASS' if rec.ok else 'FAIL'}")
         for d in rec.discrepancies:
@@ -186,6 +204,59 @@ def _cmd_replay_status(settings, args) -> int:
     return 0
 
 
+def _trading_command(fn, needs_order=False):
+    def handler(settings, args) -> int:
+        conn = _open_current(settings)
+        try:
+            run = queries.get_run(conn, settings.sample_run_key)
+            key = args.key or f"cli-{uuid.uuid4().hex}"
+            result = fn(conn, run.run_id, args.order_id, key) if needs_order else fn(conn, run.run_id, key)
+            print(json.dumps(result, indent=2, sort_keys=True))
+        finally:
+            conn.close()
+        return 0
+    return handler
+
+
+def _cmd_trades(settings, args) -> int:
+    conn = _open_current(settings)
+    try:
+        run = queries.get_run(conn, settings.sample_run_key)
+        print(f"run {run.run_id} key {run.init_key} [{run.status}] "
+              f"{'trading' if run.trading_enabled else 'replay-only'}  clock {queries.latest_market_state(conn, run.run_id)['simulated_clock']}")
+        print("proposals -> risk -> orders:")
+        for p in queries.list_proposals(conn, run.run_id):
+            risk = p["decision"] + (f" {p['risk_reason_codes']}" if p["risk_reason_codes"] else "")
+            order = (f"{p['order_status']}" + (f" ({p['terminal_reason']})" if p["terminal_reason"] else "")
+                     if p["order_id"] else "no order")
+            print(f"  {p['created_at']} {p['intent']:<13} {p['reason_code']:<14} limit {format_cents(p['limit_cents'])}"
+                  f"  risk {risk} (rev {p['account_revision']})  order {order}")
+        print("fills:")
+        for f in queries.list_fills(conn, run.run_id):
+            print(f"  {f['filled_at']} {f['intent']:<13} {f['quantity']} @ {format_cents(f['price_cents'])} "
+                  f"gross {format_cents(f['gross_cents'])} fee {format_cents(f['fee_cents'])} "
+                  f"cash {format_cents(f['net_cash_delta_cents'])} -> {format_cents(f['balance_after_cents'])} "
+                  f"(quote seq {f['quote_source_sequence']})")
+        print("positions:")
+        for p in queries.list_positions(conn, run.run_id):
+            print(f"  {p.status:<6} {p.contract_id} qty {p.quantity} reserved {p.reserved_contracts} "
+                  f"entry {format_cents(p.entry_price_cents)} basis {format_cents(p.remaining_cost_basis_cents)} "
+                  f"value {format_cents(p.market_value_cents)} unrealized {format_cents(p.unrealized_pnl_cents)} "
+                  f"[{p.valuation_status}]")
+        print("closed trades:")
+        for t in queries.list_closed_trades(conn, run.run_id):
+            print(f"  {t.opened_at} -> {t.closed_at} {t.exit_reason}: entry cost {format_cents(t.entry_cost_cents)} "
+                  f"exit net {format_cents(t.exit_net_proceeds_cents)} fees {format_cents(t.total_fees_cents)} "
+                  f"realized {format_cents(t.realized_pnl_cents)}")
+        print("ledger:")
+        for e in queries.list_ledger(conn, run.run_id):
+            print(f"  #{e['ledger_sequence']} {e['entry_type']:<15} premium {format_cents(e['premium_cash_delta_cents'])} "
+                  f"fee {format_cents(e['fee_cash_delta_cents'])} balance {format_cents(e['balance_after_cents'])}")
+    finally:
+        conn.close()
+    return 0
+
+
 def _cmd_fixture_checksum(settings, args) -> int:
     data = json.loads(Path(args.path).read_text(encoding="utf-8"))
     actual = compute_checksum(data)
@@ -199,8 +270,11 @@ def _cmd_fixture_checksum(settings, args) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m paper_trading", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--run-key", help="run to act on (default: PAPER_SAMPLE_RUN_KEY)")
     sub = parser.add_subparsers(dest="command", required=True, metavar="command")
-    sub.add_parser("init-sample", help="create the sample run (idempotent)").set_defaults(fn=_cmd_init)
+    init = sub.add_parser("init-sample", help="create the sample run (idempotent)")
+    init.add_argument("--trading", action="store_true", help="create a trading-enabled run (Step 5)")
+    init.set_defaults(fn=_cmd_init)
     sub.add_parser("migrate", help="apply pending migrations").set_defaults(fn=_cmd_migrate)
     sub.add_parser("status", help="show run, account, and replay").set_defaults(fn=_cmd_status)
     sub.add_parser("serve", help="start the dashboard").set_defaults(fn=_cmd_serve)
@@ -221,6 +295,19 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--key", help="idempotency key; reuse it to retry safely")
         p.set_defaults(fn=_replay_command(fn))
 
+    for name, fn, text in (
+        ("start", replay.start_trading, "start a trading run (READY -> RUNNING)"),
+        ("request-close", replay.request_close, "manually close the open position"),
+    ):
+        p = sub.add_parser(name, help=text)
+        p.add_argument("--key", help="idempotency key; reuse it to retry safely")
+        p.set_defaults(fn=_trading_command(fn))
+    cancel = sub.add_parser("cancel", help="cancel an OPEN order")
+    cancel.add_argument("order_id")
+    cancel.add_argument("--key", help="idempotency key; reuse it to retry safely")
+    cancel.set_defaults(fn=_trading_command(replay.cancel_order, needs_order=True))
+    sub.add_parser("trades", help="show the trading audit trail").set_defaults(fn=_cmd_trades)
+
     sub.add_parser("replay-status", help="show replay progress and events").set_defaults(fn=_cmd_replay_status)
     checksum = sub.add_parser("fixture-checksum", help="print a fixture file's checksum")
     checksum.add_argument("path")
@@ -232,9 +319,12 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         settings = get_settings()
+        if args.run_key:
+            settings = settings.model_copy(update={"sample_run_key": args.run_key})
         return args.fn(settings, args)
     except (DatabaseNotInitializedError, MigrationError, IdempotencyConflictError,
-            queries.RunNotFoundError, replay.ReplayError, FixtureValidationError, OSError) as exc:
+            queries.RunNotFoundError, replay.ReplayError, FixtureValidationError, OSError,
+            trading.TradingError, OrderNotFoundError, OrderNotOpenError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     except ValidationError as exc:

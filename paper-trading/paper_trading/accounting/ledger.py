@@ -153,6 +153,8 @@ def reconcile(conn: sqlite3.Connection, run_id: str) -> ReconciliationResult:
         if f["premium_cash_delta_cents"] != sign * f["gross_cents"] or f["fee_cash_delta_cents"] != -f["fee_cents"]:
             problems.append(f"fill {f['fill_id']} does not match its ledger entry")
 
+    problems.extend(_trading_discrepancies(conn, run, account_id))
+
     snap = compute_snapshot(conn, account_id)
     if snap.available_cash_cents < 0:
         problems.append("reserved cash exceeds cash")
@@ -164,3 +166,55 @@ def reconcile(conn: sqlite3.Connection, run_id: str) -> ReconciliationResult:
             )
 
     return ReconciliationResult(run_id, not problems, cash, problems)
+
+
+def _trading_discrepancies(conn: sqlite3.Connection, run: sqlite3.Row, account_id: str) -> list[str]:
+    """Orders, reservations, positions, and closed trades agree with fills (Step 5)."""
+    problems: list[str] = []
+    run_id = run["run_id"]
+    fee = run["fee_per_contract_cents"]
+    for o in conn.execute(
+        """SELECT o.*, c.multiplier, (SELECT COUNT(*) FROM fills f WHERE f.order_id = o.order_id) AS n_fills
+             FROM orders o JOIN option_contracts c USING (contract_id) WHERE o.run_id = ?""", (run_id,)
+    ):
+        if (o["status"] == "FILLED") != (o["n_fills"] == 1) or o["n_fills"] > 1:
+            problems.append(f"order {o['order_id']} is {o['status']} with {o['n_fills']} fills")
+        if o["status"] == "OPEN" and o["intent"] == "BUY_TO_OPEN":
+            expected = o["limit_cents"] * o["multiplier"] * o["quantity"] + fee * o["quantity"]
+            if o["reserved_cash_cents"] != expected:
+                problems.append(f"order {o['order_id']} reserves {o['reserved_cash_cents']} cash, expected {expected}")
+        if o["status"] == "OPEN" and o["intent"] == "SELL_TO_CLOSE" and o["reserved_contracts"] != o["quantity"]:
+            problems.append(f"order {o['order_id']} reserves {o['reserved_contracts']} contracts")
+
+    open_positions = 0
+    for p in conn.execute(
+        """SELECT p.*, f.gross_cents AS entry_gross, f.fee_cents AS entry_fee,
+                  (SELECT COALESCE(SUM(reserved_contracts), 0) FROM orders o
+                    WHERE o.position_id = p.position_id AND o.status IN ('PENDING','OPEN')) AS order_reserved
+             FROM positions p JOIN fills f ON f.fill_id = p.entry_fill_id WHERE p.run_id = ?""", (run_id,)
+    ):
+        if p["reserved_contracts"] != p["order_reserved"]:
+            problems.append(f"position {p['position_id']} reserves {p['reserved_contracts']} contracts but open "
+                            f"orders hold {p['order_reserved']}")
+        if p["status"] == "OPEN":
+            open_positions += 1
+            if p["remaining_cost_basis_cents"] != p["entry_gross"] + p["entry_fee"]:
+                problems.append(f"position {p['position_id']} cost basis does not equal entry premium + fee")
+            if p["valuation_status"] != "UNAVAILABLE" and p["market_value_cents"] is not None and \
+                    p["unrealized_pnl_cents"] != p["market_value_cents"] - p["remaining_cost_basis_cents"]:
+                problems.append(f"position {p['position_id']} unrealized P&L does not equal value - basis")
+        elif conn.execute("SELECT COUNT(*) FROM closed_trades WHERE position_id = ?",
+                          (p["position_id"],)).fetchone()[0] != 1:
+            problems.append(f"closed position {p['position_id']} has no closed-trade record")
+    if open_positions > 1:
+        problems.append(f"{open_positions} open positions; the MVP allows one")
+
+    for t in conn.execute(
+        """SELECT t.*, ef.gross_cents AS eg, ef.fee_cents AS efee, xf.gross_cents AS xg, xf.fee_cents AS xfee
+             FROM closed_trades t JOIN fills ef ON ef.fill_id = t.entry_fill_id
+             JOIN fills xf ON xf.fill_id = t.exit_fill_id WHERE t.run_id = ?""", (run_id,)
+    ):
+        if (t["entry_cost_cents"] != t["eg"] + t["efee"] or t["exit_net_proceeds_cents"] != t["xg"] - t["xfee"]
+                or t["total_fees_cents"] != t["efee"] + t["xfee"]):
+            problems.append(f"closed trade {t['closed_trade_id']} does not match its fills")
+    return problems

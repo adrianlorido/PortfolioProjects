@@ -98,6 +98,9 @@ class Run(Record):
     fixture_version: Optional[Id]
     fixture_checksum: Optional[Id]
     checkpoint_event_sequence: Count
+    # Step 5: trading-enabled runs run the trading workflow; replay-only runs stay READY.
+    trading_enabled: Bool = False
+    status_reason: Optional[str] = None
 
     @model_validator(mode="after")
     def _check(self) -> "Run":

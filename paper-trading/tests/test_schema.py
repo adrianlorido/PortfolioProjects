@@ -88,9 +88,15 @@ def test_pinned_run_parameters_immutable(conn, initialized):
         conn.execute("DELETE FROM runs")
 
 
-def test_run_cannot_start_without_fixture_metadata(conn, initialized):
+def test_run_cannot_start_without_fixture_metadata(conn, settings, tmp_path):
+    from paper_trading.app.coordinator import init_sample
+
+    replay_only = init_sample(conn, settings)
+    with pytest.raises(sqlite3.IntegrityError, match="replay-only runs stay READY"):
+        conn.execute("UPDATE runs SET status = 'RUNNING' WHERE run_id = ?", (replay_only.run_id,))
+    trading = init_sample(conn, settings.model_copy(update={"sample_run_key": "trading"}), trading=True)
     with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
-        conn.execute("UPDATE runs SET status = 'RUNNING'")
+        conn.execute("UPDATE runs SET status = 'RUNNING' WHERE run_id = ?", (trading.run_id,))
 
 
 def test_account_revision_only_increases(conn, initialized):
@@ -180,7 +186,7 @@ def test_transaction_rolls_back_on_error(conn, initialized):
 def test_migrations_idempotent(conn, initialized):
     assert migrator.migrate(conn) == []
     version, pending = migrator.status(conn)
-    assert version == 2 and pending == []
+    assert version == len(migrator.discover()) and pending == []
 
 
 def test_edited_migration_detected(conn, initialized):

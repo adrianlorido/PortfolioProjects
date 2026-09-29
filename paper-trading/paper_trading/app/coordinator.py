@@ -45,9 +45,13 @@ def utc_now() -> str:
     return format_utc(datetime.now(timezone.utc).replace(microsecond=0))
 
 
-def init_payload(settings: Settings) -> dict:
-    """Parameters pinned by initialization. Any change is a different payload."""
-    return {
+def init_payload(settings: Settings, trading: bool = False) -> dict:
+    """Parameters pinned by initialization. Any change is a different payload.
+
+    ``trading_enabled`` is only added for trading runs so that replay-only runs
+    created before Step 5 keep their original payload hash.
+    """
+    payload = {
         "mode": versions.MODE,
         "currency": settings.currency,
         "starting_cash_cents": settings.starting_cash_cents,
@@ -63,21 +67,27 @@ def init_payload(settings: Settings) -> dict:
         "execution_model_version": versions.EXECUTION_MODEL_VERSION,
         "fee_schedule_version": versions.fee_schedule_version(settings.fee_per_contract_cents),
     }
+    if trading:
+        payload["trading_enabled"] = True
+    return payload
 
 
 def _hash(payload: dict) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def init_sample(conn: sqlite3.Connection, settings: Settings) -> InitResult:
+def init_sample(conn: sqlite3.Connection, settings: Settings, trading: bool = False) -> InitResult:
     """Create the sample run, account, watchlist, and initial funding.
+
+    ``trading=True`` creates a trading-enabled run (Step 5); otherwise the run is
+    replay-only (Step 4 behavior) and can never leave READY.
 
     Idempotent: keyed by ``settings.sample_run_key``. Re-running with the same
     parameters returns the existing run; different parameters under the same
     key raise ``IdempotencyConflictError``. Never deletes or resets data.
     """
     migrate(conn)
-    payload = init_payload(settings)
+    payload = init_payload(settings, trading)
     payload_hash = _hash(payload)
     key = f"init:{settings.sample_run_key}"
 
@@ -153,23 +163,26 @@ def init_sample(conn: sqlite3.Connection, settings: Settings) -> InitResult:
             for i, s in enumerate(run.watchlist)
         ]
 
+        columns = ["run_id", "init_key", "init_payload_hash", "schema_version", "mode", "is_sample", "status",
+                   "created_at", "currency", "starting_cash_cents", "strategy_id", "strategy_version",
+                   "risk_policy_version", "execution_model_version", "fee_schedule_version",
+                   "fee_per_contract_cents", "entry_risk_limit_cents", "session_timezone", "session_start",
+                   "session_end", "simulated_clock", "session_reference_cents", "fixture_id", "fixture_version",
+                   "fixture_checksum", "checkpoint_event_sequence"]
+        values = [run.run_id, run.init_key, payload_hash, run.schema_version, run.mode, 1, run.status,
+                  run.created_at, run.currency, run.starting_cash_cents, run.strategy_id,
+                  run.strategy_version, run.risk_policy_version, run.execution_model_version,
+                  run.fee_schedule_version, run.fee_per_contract_cents, run.entry_risk_limit_cents,
+                  run.session_timezone, run.session_start, run.session_end, run.simulated_clock,
+                  run.session_reference_cents, run.fixture_id, run.fixture_version,
+                  run.fixture_checksum, run.checkpoint_event_sequence]
+        if trading:
+            # Replay-only runs rely on the column default (0), which also keeps this insert valid on
+            # a schema-v1 database. The flag cannot change after creation (trigger).
+            columns.append("trading_enabled")
+            values.append(1)
         conn.execute(
-            """INSERT INTO runs (run_id, init_key, init_payload_hash, schema_version, mode, is_sample, status,
-                   created_at, currency, starting_cash_cents, strategy_id, strategy_version,
-                   risk_policy_version, execution_model_version, fee_schedule_version,
-                   fee_per_contract_cents, entry_risk_limit_cents, session_timezone, session_start,
-                   session_end, simulated_clock, session_reference_cents, fixture_id, fixture_version,
-                   fixture_checksum, checkpoint_event_sequence)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (
-                run.run_id, run.init_key, payload_hash, run.schema_version, run.mode, 1, run.status,
-                run.created_at, run.currency, run.starting_cash_cents, run.strategy_id,
-                run.strategy_version, run.risk_policy_version, run.execution_model_version,
-                run.fee_schedule_version, run.fee_per_contract_cents, run.entry_risk_limit_cents,
-                run.session_timezone, run.session_start, run.session_end, run.simulated_clock,
-                run.session_reference_cents, run.fixture_id, run.fixture_version,
-                run.fixture_checksum, run.checkpoint_event_sequence,
-            ),
+            f"INSERT INTO runs ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))})", values
         )
         conn.execute(
             """INSERT INTO accounts (account_id, run_id, schema_version, currency, starting_cash_cents,
@@ -197,7 +210,8 @@ def init_sample(conn: sqlite3.Connection, settings: Settings) -> InitResult:
         )
 
         events = [
-            ("RUN_CREATED", {"init_key": run.init_key, "payload_hash": payload_hash}),
+            ("RUN_CREATED", {"init_key": run.init_key, "payload_hash": payload_hash,
+                             "trading_enabled": trading}),
             ("WATCHLIST_SET", {"symbols": list(run.watchlist)}),
             ("ACCOUNT_FUNDED", {"account_id": account.account_id, "amount_cents": run.starting_cash_cents}),
         ]

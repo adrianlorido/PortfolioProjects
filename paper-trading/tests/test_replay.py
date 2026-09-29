@@ -272,14 +272,14 @@ def test_failure_before_commit_leaves_no_partial_event(conn, worked, key, monkey
     class Boom(RuntimeError):
         pass
 
-    original = replay._append_run_event
+    original = replay.append_run_event
 
     def append_then_crash(c, run_id, event_type, simulated_at, payload):
         seq = original(c, run_id, event_type, simulated_at, payload)
         real_execute_calls.append(event_type)
         raise Boom("crash after writing the event but before commit")
 
-    monkeypatch.setattr(replay, "_append_run_event", append_then_crash)
+    monkeypatch.setattr(replay, "append_run_event", append_then_crash)
     with pytest.raises(Boom):
         replay.step(conn, rid, "crashing-step")
     assert real_execute_calls == ["QUOTE_ACCEPTED"]
@@ -289,7 +289,7 @@ def test_failure_before_commit_leaves_no_partial_event(conn, worked, key, monkey
     assert conn.execute("SELECT checkpoint_event_sequence FROM runs").fetchone()[0] == before_checkpoint
     assert queries.get_replay_state(conn, rid)["processed_events"] == 1
 
-    monkeypatch.setattr(replay, "_append_run_event", original)
+    monkeypatch.setattr(replay, "append_run_event", original)
     retried = replay.step(conn, rid, "crashing-step")  # same key: nothing was recorded, so it runs now
     assert retried["replay_position"] == 2 and retried["outcome"] == "ACCEPTED"
 

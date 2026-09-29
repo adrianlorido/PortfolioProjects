@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from typing import Optional
 from zoneinfo import ZoneInfo
 
+from pydantic import ValidationError
+
 from paper_trading.accounting import compute_snapshot, reconcile
 from paper_trading.accounting.ledger import ReconciliationResult
 from paper_trading.contracts.models import (
@@ -33,6 +35,17 @@ def _record(model, row: sqlite3.Row, **overrides):
     return model(**data)
 
 
+def _stored_record(model, row: sqlite3.Row, **overrides):
+    """Read a stored record for display. If stored data no longer passes the model's
+    invariants (corrupted books), show it as stored instead of failing the page:
+    reconciliation reports the discrepancy and the run is paused."""
+    try:
+        return _record(model, row, **overrides)
+    except ValidationError:
+        data = {k: row[k] for k in model.model_fields if k in row.keys()}
+        return model.model_construct(**{**data, "schema_version": SCHEMA_VERSION, **overrides})
+
+
 def get_run(conn: sqlite3.Connection, init_key: str) -> Run:
     row = conn.execute("SELECT * FROM runs WHERE init_key = ?", (init_key,)).fetchone()
     if row is None:
@@ -42,7 +55,8 @@ def get_run(conn: sqlite3.Connection, init_key: str) -> Run:
     watchlist = [r["symbol"] for r in conn.execute(
         "SELECT symbol FROM watchlist_items WHERE run_id = ? ORDER BY position", (row["run_id"],)
     )]
-    return _record(Run, row, is_sample=bool(row["is_sample"]), watchlist=watchlist)
+    trading = bool(row["trading_enabled"]) if "trading_enabled" in row.keys() else False
+    return _record(Run, row, is_sample=bool(row["is_sample"]), watchlist=watchlist, trading_enabled=trading)
 
 
 def get_account(conn: sqlite3.Connection, run_id: str) -> Account:
@@ -61,21 +75,21 @@ def list_positions(conn: sqlite3.Connection, run_id: str) -> list[Position]:
     rows = conn.execute(
         "SELECT * FROM positions WHERE run_id = ? ORDER BY opened_at, position_id", (run_id,)
     ).fetchall()
-    return [_record(Position, r) for r in rows]
+    return [_stored_record(Position, r) for r in rows]
 
 
 def list_orders(conn: sqlite3.Connection, run_id: str) -> list[Order]:
     rows = conn.execute(
         "SELECT * FROM orders WHERE run_id = ? ORDER BY submitted_at, order_id", (run_id,)
     ).fetchall()
-    return [_record(Order, r) for r in rows]
+    return [_stored_record(Order, r) for r in rows]
 
 
 def list_closed_trades(conn: sqlite3.Connection, run_id: str) -> list[ClosedTrade]:
     rows = conn.execute(
         "SELECT * FROM closed_trades WHERE run_id = ? ORDER BY closed_at, closed_trade_id", (run_id,)
     ).fetchall()
-    return [_record(ClosedTrade, r) for r in rows]
+    return [_stored_record(ClosedTrade, r) for r in rows]
 
 
 def list_run_events(conn: sqlite3.Connection, run_id: str) -> list[dict]:
@@ -107,6 +121,10 @@ class Dashboard:
     rejected_inputs: list[dict] = field(default_factory=list)
     market: dict = field(default_factory=dict)
     trading_activity: dict = field(default_factory=dict)
+    proposals: list[dict] = field(default_factory=list)
+    fills: list[dict] = field(default_factory=list)
+    exit_intents: list[dict] = field(default_factory=list)
+    runs: list[dict] = field(default_factory=list)
 
 
 def get_dashboard(conn: sqlite3.Connection, init_key: str) -> Dashboard:
@@ -126,6 +144,10 @@ def get_dashboard(conn: sqlite3.Connection, init_key: str) -> Dashboard:
         rejected_inputs=list_rejected_inputs(conn, run.run_id),
         market=latest_market_state(conn, run.run_id),
         trading_activity=trading_activity_counts(conn, run.run_id),
+        proposals=list_proposals(conn, run.run_id),
+        fills=list_fills(conn, run.run_id),
+        exit_intents=list_exit_intents(conn, run.run_id),
+        runs=list_runs(conn),
     )
 
 
@@ -255,3 +277,64 @@ def trading_activity_counts(conn: sqlite3.Connection, run_id: str) -> dict:
         "SELECT COUNT(*) FROM cash_ledger_entries WHERE run_id = ? AND entry_type <> 'INITIAL_FUNDING'", (run_id,)
     ).fetchone()[0]
     return counts
+
+
+
+# --- Step 5: trading read models -------------------------------------------
+
+
+def list_runs(conn: sqlite3.Connection) -> list[dict]:
+    return [dict(r) for r in conn.execute(
+        """SELECT run_id, init_key, status, trading_enabled, created_at, fixture_id, status_reason
+             FROM runs ORDER BY created_at, run_id""")]
+
+
+def list_proposals(conn: sqlite3.Connection, run_id: str) -> list[dict]:
+    """Proposals with their risk decision and resulting order, in creation order."""
+    rows = conn.execute(
+        """SELECT p.*, d.risk_decision_id, d.decision, d.reason_codes_json, d.account_revision, d.required_cash_cents,
+                  d.available_cash_cents, d.entry_risk_cents, d.entry_risk_limit_cents,
+                  o.order_id, o.status AS order_status, o.terminal_reason, o.expires_at, o.after_source_sequence,
+                  q.source_sequence AS quote_source_sequence
+             FROM trade_proposals p
+             LEFT JOIN risk_decisions d ON d.proposal_id = p.proposal_id
+             LEFT JOIN orders o ON o.proposal_id = p.proposal_id
+             LEFT JOIN market_quotes q ON q.quote_id = p.quote_id
+            WHERE p.run_id = ? ORDER BY p.created_at, p.rowid""", (run_id,)
+    ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["risk_reason_codes"] = json.loads(d.pop("reason_codes_json")) if d.get("reason_codes_json") else []
+        out.append(d)
+    return out
+
+
+def list_risk_decisions(conn: sqlite3.Connection, run_id: str) -> list[dict]:
+    rows = conn.execute("SELECT * FROM risk_decisions WHERE run_id = ? ORDER BY evaluated_at, rowid",
+                        (run_id,)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["reason_codes"] = json.loads(d.pop("reason_codes_json"))
+        out.append(d)
+    return out
+
+
+def list_fills(conn: sqlite3.Connection, run_id: str) -> list[dict]:
+    return [dict(r) for r in conn.execute(
+        """SELECT f.*, o.intent, q.source_sequence AS quote_source_sequence, l.net_cash_delta_cents,
+                  l.balance_after_cents
+             FROM fills f JOIN orders o USING (order_id) JOIN market_quotes q ON q.quote_id = f.quote_id
+             JOIN cash_ledger_entries l ON l.fill_id = f.fill_id
+            WHERE f.run_id = ? ORDER BY f.filled_at, f.rowid""", (run_id,))]
+
+
+def list_exit_intents(conn: sqlite3.Connection, run_id: str) -> list[dict]:
+    return [dict(r) for r in conn.execute(
+        "SELECT * FROM exit_intents WHERE run_id = ? ORDER BY created_at, rowid", (run_id,))]
+
+
+def list_ledger(conn: sqlite3.Connection, run_id: str) -> list[dict]:
+    return [dict(r) for r in conn.execute(
+        "SELECT * FROM cash_ledger_entries WHERE run_id = ? ORDER BY ledger_sequence", (run_id,))]

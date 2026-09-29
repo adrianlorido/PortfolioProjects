@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from paper_trading.app.api import create_app
 from paper_trading.storage.db import DatabaseNotInitializedError, connect
+from paper_trading.storage import migrator
 from paper_trading.storage.migrator import migrate
 
 
@@ -20,7 +21,7 @@ def test_health(client, initialized):
     body = client.get("/health").json()
     assert body["status"] == "ok"
     assert body["mode"] == "SAMPLE_PAPER" and body["is_sample"] is True
-    assert body["db_schema_version"] == 2
+    assert body["db_schema_version"] == len(migrator.discover())
     assert body["run_initialized"] is True and body["run_id"] == initialized.run_id
 
 
@@ -50,14 +51,15 @@ def test_empty_collections(client, path):
     assert r.status_code == 200 and r.json() == []
 
 
-def test_only_replay_commands_accept_writes(client):
+def test_only_replay_and_trading_commands_accept_writes(client):
     for path in ["/api/orders", "/api/account", "/api/positions", "/api/closed-trades", "/api/quotes"]:
         assert client.post(path, json={}).status_code == 405
     write_paths = sorted(
         r.path for r in client.app.routes if getattr(r, "methods", set()) - {"GET", "HEAD"}
     )
     assert write_paths == sorted(
-        f"/api/replay/{c}" for c in ("load", "step", "pause", "resume", "run-to-end")
+        [f"/api/replay/{c}" for c in ("load", "step", "pause", "resume", "run-to-end")]
+        + [f"/api/trading/{c}" for c in ("start", "request-close", "cancel")]
     )
 
 
@@ -71,11 +73,14 @@ def test_dashboard_renders_backend_values(client, initialized):
     assert initialized.run_id in html
     assert "Ledger reconciled" in html
     assert "No positions." in html and "No orders." in html and "No closed trades." in html
-    assert "Start trading — Not implemented" in html
-    assert "Request close — Not implemented" in html
+    # Replay-only runs (the default sample run) never trade; their trading controls are unavailable.
+    assert "REPLAY-ONLY RUN" in html
+    assert "Start trading — replay-only run" in html
+    assert "Request close — replay-only run" in html
     assert "excludes exit fee" in html
     # Trading controls are disabled buttons.
     assert html.count("disabled>Start trading") == 1 and html.count("disabled>Request close") == 1
+    assert 'data-command="start"' not in html and 'data-command="request-close"' not in html
 
 
 def test_static_assets_served(client):

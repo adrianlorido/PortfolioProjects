@@ -113,7 +113,7 @@ def test_dashboard_during_replay(client):
     assert "$3.90 / $4.00" in html and "FRESH" in html
     assert 'data-command="step"' in html and 'data-command="pause"' in html
     assert 'data-command="run-to-end"' in html
-    assert "Start trading — Not implemented" in html
+    assert "Start trading — replay-only run" in html
     assert html.count("$100,000.00") >= 4
     assert "No positions." in html and "No orders." in html and "No closed trades." in html
 

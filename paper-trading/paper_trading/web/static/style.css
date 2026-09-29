@@ -110,3 +110,18 @@ progress { width: 160px; vertical-align: middle; margin-right: 6px; }
 .command-msg.error { color: var(--bad-text); }
 pre.raw { margin: 6px 0 0; font-size: 12px; white-space: pre; }
 details summary { cursor: pointer; color: var(--accent); }
+
+.pill-trading { background: var(--ok-bg); color: var(--ok-text); }
+.pill-replay { background: var(--neutral-bg); color: var(--muted); }
+.pill-running { background: var(--ok-bg); color: var(--ok-text); }
+.pill-completed { background: var(--ok-bg); color: var(--ok-text); }
+.pill-incomplete { background: var(--bad-bg); color: var(--bad-text); }
+.run-switcher { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: -8px 0 16px; }
+.run-switcher a { padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px; color: var(--text);
+  text-decoration: none; background: var(--surface); }
+.run-switcher a.current { border-color: var(--accent); font-weight: 600; }
+.outcome h2 { margin-bottom: 6px; }
+.outcome p { margin: 4px 0; }
+.outcome-completed { border-left: 4px solid var(--ok-text); }
+.outcome-incomplete, .outcome-paused { border-left: 4px solid var(--bad-text); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

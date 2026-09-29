@@ -1,6 +1,7 @@
 """Sample-data replay: fixture loading and replay commands (Step 4).
 
-Commands: ``load_fixture``, ``step``, ``pause``, ``resume``, ``run_to_end``.
+Commands: ``load_fixture``, ``step``, ``pause``, ``resume``, ``run_to_end``, and for
+trading runs ``start_trading``, ``request_close``, ``cancel_order``.
 
 - Serialized: every state change runs inside ``BEGIN IMMEDIATE``, which holds
   SQLite's single write lock, so commands from any thread or process apply
@@ -32,7 +33,10 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Callable, Optional
 
-from paper_trading.app.coordinator import IdempotencyConflictError, utc_now, new_id
+from paper_trading.app.coordinator import IdempotencyConflictError, new_id, utc_now
+from paper_trading.app import trading
+from paper_trading.app.events import append_run_event
+from paper_trading.accounting.ledger import reconcile
 from paper_trading.contracts.models import MarketQuote
 from paper_trading.contracts.types import SCHEMA_VERSION, parse_utc
 from paper_trading.market_data.fixtures import (
@@ -75,24 +79,6 @@ class LoadResult:
 
 
 # --- helpers ---------------------------------------------------------------
-
-
-def _append_run_event(conn: sqlite3.Connection, run_id: str, event_type: str, simulated_at: str,
-                      payload: dict) -> int:
-    """Insert the next run event and advance the run checkpoint to it."""
-    seq = conn.execute(
-        "SELECT COALESCE(MAX(event_sequence), 0) + 1 FROM run_events WHERE run_id = ?", (run_id,)
-    ).fetchone()[0]
-    conn.execute(
-        """INSERT INTO run_events (event_id, run_id, event_sequence, event_type, simulated_at, recorded_at,
-               payload_json) VALUES (?,?,?,?,?,?,?)""",
-        (new_id("evt"), run_id, seq, event_type, simulated_at, utc_now(), json.dumps(payload, sort_keys=True)),
-    )
-    conn.execute(
-        "UPDATE runs SET checkpoint_event_sequence = ?, simulated_clock = ? WHERE run_id = ?",
-        (seq, simulated_at, run_id),
-    )
-    return seq
 
 
 @lru_cache(maxsize=16)
@@ -253,7 +239,7 @@ def load_fixture(conn: sqlite3.Connection, run_id: str, doc: FixtureDocument, co
                    total_events, loaded_at, updated_at) VALUES (?,?,?,?,?,?,?,?)""",
             (run_id, doc.fixture_id, doc.fixture_version, "ACTIVE", 1, len(doc.events), now, now),
         )
-        _append_run_event(conn, run_id, "FIXTURE_LOADED", run["simulated_clock"], {
+        append_run_event(conn, run_id, "FIXTURE_LOADED", run["simulated_clock"], {
             "fixture_id": doc.fixture_id,
             "fixture_version": doc.fixture_version,
             "checksum": doc.checksum,
@@ -277,9 +263,16 @@ def _step_in_transaction(conn: sqlite3.Connection, run_id: str) -> dict:
     position = state["next_position"]
     event = doc.events[position - 1]
     run = conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+    is_trading = bool(run["trading_enabled"])
+    if is_trading and run["status"] != "RUNNING":
+        if run["status"] == "PAUSED":
+            raise ReplayPausedError(f"run is paused: {run['status_reason'] or 'resume it before stepping'}")
+        raise trading.RunStateError(f"trading run is {run['status']}; start it before replaying")
     clock = event.at  # the clock advances to the scheduled time, never to an observation time
     if parse_utc(clock) < parse_utc(run["simulated_clock"]):
         raise ReplayError("fixture event is scheduled before the current simulated clock")
+    if is_trading:
+        trading.before_event(conn, run_id, clock)  # 1. expirations due at or before this event
 
     result = {
         "replay_position": position,
@@ -292,7 +285,7 @@ def _step_in_transaction(conn: sqlite3.Connection, run_id: str) -> dict:
     }
 
     if event.event_type != "QUOTE":
-        seq = _append_run_event(conn, run_id, event.event_type, clock, {"replay_position": position})
+        seq = append_run_event(conn, run_id, event.event_type, clock, {"replay_position": position})
         outcome = "BOUNDARY"
     else:
         raw = event.input
@@ -318,7 +311,7 @@ def _step_in_transaction(conn: sqlite3.Connection, run_id: str) -> dict:
                 received_at=clock,
                 **verdict.fields,
             )
-            seq = _append_run_event(conn, run_id, "QUOTE_ACCEPTED", clock, {
+            seq = append_run_event(conn, run_id, "QUOTE_ACCEPTED", clock, {
                 "replay_position": position, "quote_id": quote.quote_id, "contract_id": quote.contract_id,
                 "source_sequence": quote.source_sequence,
             })
@@ -334,10 +327,13 @@ def _step_in_transaction(conn: sqlite3.Connection, run_id: str) -> dict:
             )
             outcome = "ACCEPTED"
             result["quote_id"] = quote.quote_id
+            if is_trading:
+                # 3-6. open orders vs this quote, fills and accounting, strategy, risk, acceptance
+                result["trading"] = trading.on_accepted_quote(conn, run_id, quote, clock)
         else:
             rejection_id = new_id("rej")
             reasons = list(verdict.reasons)
-            seq = _append_run_event(conn, run_id, "INPUT_REJECTED", clock, {
+            seq = append_run_event(conn, run_id, "INPUT_REJECTED", clock, {
                 "replay_position": position, "rejection_id": rejection_id, "reason_codes": reasons,
             })
             as_dict = raw if isinstance(raw, dict) else {}
@@ -365,16 +361,26 @@ def _step_in_transaction(conn: sqlite3.Connection, run_id: str) -> dict:
         (run_id, position, seq, event.event_type, event.ref, event.at, outcome,
          result["quote_id"], result["rejection_id"]),
     )
+    if is_trading:
+        trading.after_event(conn, run_id, clock, event.event_type)
     exhausted = position == state["total_events"]
     conn.execute(
         "UPDATE replay_state SET next_position = ?, status = ?, updated_at = ? WHERE run_id = ?",
         (position + 1, "EXHAUSTED" if exhausted else "ACTIVE", utc_now(), run_id),
     )
     if exhausted:
-        _append_run_event(conn, run_id, "REPLAY_EXHAUSTED", clock, {
+        append_run_event(conn, run_id, "REPLAY_EXHAUSTED", clock, {
             "total_events": state["total_events"],
-            "note": "All fixture events were replayed. No trading workflow ran; this is not a completed trade.",
+            "note": ("All fixture events were replayed; the trading outcome is recorded separately as "
+                     "RUN_COMPLETED or RUN_INCOMPLETE." if is_trading else
+                     "All fixture events were replayed. No trading workflow ran; this is not a completed trade."),
         })
+        if is_trading:
+            result["run_status"] = trading.on_exhausted(conn, run_id, clock)
+    if is_trading:
+        check = reconcile(conn, run_id)
+        if not check.ok:  # rolls the whole event back; the caller then pauses the run
+            raise trading.ReconciliationFailedError("; ".join(check.discrepancies))
 
     result.update(
         outcome=outcome,
@@ -386,8 +392,34 @@ def _step_in_transaction(conn: sqlite3.Connection, run_id: str) -> dict:
     return result
 
 
+def _pre_step_reconcile(conn: sqlite3.Connection, run_id: str) -> None:
+    """Trading runs reconcile before every event (so also on the first event after a restart)."""
+    with transaction(conn):
+        run = conn.execute("SELECT trading_enabled, status FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+        reason = None
+        if run is not None and run["trading_enabled"] and run["status"] == "RUNNING":
+            reason = trading.pause_if_unreconciled(conn, run_id)
+    if reason:
+        raise trading.ReconciliationFailedError(reason)
+
+
+def _pause_after_failed_event(conn: sqlite3.Connection, run_id: str) -> None:
+    with transaction(conn):
+        trading.pause_if_unreconciled(conn, run_id)
+        run = conn.execute("SELECT status FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+        if run["status"] == "RUNNING":  # books still fine: the event itself would have broken them
+            conn.execute("UPDATE runs SET status = 'PAUSED', status_reason = ? WHERE run_id = ?",
+                         ("Paused: an event would have left the books unreconciled and was rolled back.", run_id))
+            conn.execute("UPDATE replay_state SET status = 'PAUSED' WHERE run_id = ? AND status = 'ACTIVE'", (run_id,))
+
+
 def step(conn: sqlite3.Connection, run_id: str, idempotency_key: str) -> dict:
-    return _command(conn, idempotency_key, "REPLAY_STEP", run_id, lambda: _step_in_transaction(conn, run_id))
+    _pre_step_reconcile(conn, run_id)
+    try:
+        return _command(conn, idempotency_key, "REPLAY_STEP", run_id, lambda: _step_in_transaction(conn, run_id))
+    except trading.ReconciliationFailedError:
+        _pause_after_failed_event(conn, run_id)
+        raise
 
 
 def _set_paused(conn: sqlite3.Connection, run_id: str, paused: bool) -> dict:
@@ -395,13 +427,26 @@ def _set_paused(conn: sqlite3.Connection, run_id: str, paused: bool) -> dict:
     if state["status"] == "EXHAUSTED":
         raise ReplayExhaustedError("replay has already reached the end of the fixture")
     target = "PAUSED" if paused else "ACTIVE"
+    run = conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+    if run["trading_enabled"]:
+        # Trading runs pause and resume the run itself; resuming requires reconciled books.
+        if run["status"] not in ("RUNNING", "PAUSED"):
+            raise trading.RunStateError(f"trading run is {run['status']}; start it first")
+        run_target = "PAUSED" if paused else "RUNNING"
+        if run["status"] != run_target:
+            if not paused:
+                check = reconcile(conn, run_id)
+                if not check.ok:
+                    raise trading.ReconciliationFailedError("cannot resume: " + "; ".join(check.discrepancies))
+            conn.execute("UPDATE runs SET status = ?, status_reason = ? WHERE run_id = ?",
+                         (run_target, "Paused by user." if paused else None, run_id))
     changed = state["status"] != target
     if changed:
         conn.execute(
             "UPDATE replay_state SET status = ?, updated_at = ? WHERE run_id = ?", (target, utc_now(), run_id)
         )
         clock = conn.execute("SELECT simulated_clock FROM runs WHERE run_id = ?", (run_id,)).fetchone()[0]
-        _append_run_event(conn, run_id, "REPLAY_PAUSED" if paused else "REPLAY_RESUMED", clock,
+        append_run_event(conn, run_id, "REPLAY_PAUSED" if paused else "REPLAY_RESUMED", clock,
                           {"next_position": state["next_position"]})
     return {"replay_status": target, "changed": changed, "next_position": state["next_position"]}
 
@@ -436,13 +481,18 @@ def run_to_end(conn: sqlite3.Connection, run_id: str, idempotency_key: str) -> d
     steps = 0
     stopped = "EXHAUSTED"
     while True:
-        with transaction(conn):
-            state, _ = stored_fixture(conn, run_id)
-            if state["status"] != "ACTIVE":
-                stopped = state["status"]
-                break
-            _step_in_transaction(conn, run_id)
-            steps += 1
+        _pre_step_reconcile(conn, run_id)
+        try:
+            with transaction(conn):
+                state, _ = stored_fixture(conn, run_id)
+                if state["status"] != "ACTIVE":
+                    stopped = state["status"]
+                    break
+                _step_in_transaction(conn, run_id)
+                steps += 1
+        except trading.ReconciliationFailedError:
+            _pause_after_failed_event(conn, run_id)
+            raise
 
     with transaction(conn):
         prior = _prior_result(conn, key, h)
@@ -456,3 +506,21 @@ def run_to_end(conn: sqlite3.Connection, run_id: str, idempotency_key: str) -> d
             "next_position": final["next_position"],
             "total_events": final["total_events"],
         })
+
+
+# --- trading-run commands (Step 5) -----------------------------------------
+
+
+def start_trading(conn: sqlite3.Connection, run_id: str, idempotency_key: str) -> dict:
+    """READY -> RUNNING for a trading run with a loaded fixture and reconciled books."""
+    return _command(conn, idempotency_key, "TRADING_START", run_id, lambda: trading.start(conn, run_id))
+
+
+def request_close(conn: sqlite3.Connection, run_id: str, idempotency_key: str) -> dict:
+    return _command(conn, idempotency_key, "TRADING_REQUEST_CLOSE", run_id,
+                    lambda: trading.request_close(conn, run_id))
+
+
+def cancel_order(conn: sqlite3.Connection, run_id: str, order_id: str, idempotency_key: str) -> dict:
+    return _command(conn, idempotency_key, "TRADING_CANCEL_ORDER", run_id,
+                    lambda: trading.cancel_order(conn, run_id, order_id), payload={"order_id": order_id})
