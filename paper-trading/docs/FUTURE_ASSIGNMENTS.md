@@ -46,7 +46,10 @@ The full plan, owner decisions, and measurements are in
 
 No vendor data or importer. Details: SPEC §14.
 
-### FA-1b: vendor importer (NOT STARTED)
+### FA-1b: vendor importer (SPECIFIED, NOT STARTED)
+
+The full specification is [`FA1B_INTEGRATION_SPEC.md`](FA1B_INTEGRATION_SPEC.md).
+It supersedes the summary below wherever they differ.
 
 **Owner decisions required before coding** (plan decisions 1, 3, 4, 5):
 - vendor and budget, and license terms (may data or derived datasets be kept

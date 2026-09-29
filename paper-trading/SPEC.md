@@ -852,15 +852,30 @@ example still ends at $100,078.70.
 8. **Performance without weaker checks.**
    - Source-sequence checks use the UNIQUE index (duplicate check and highest
      accepted value). The latest quote per contract is one descending index
-     probe. Replay-event and run-event pages use key ranges.
+     probe. Replay-event and run-event pages are read by key range
+     internally (their numbering has no gaps), which returns exactly the rows
+     an SQL OFFSET would.
    - Reconciliation still runs before and after every event and on every
      trading command, unchanged.
-   - List endpoints take `limit` (1–5000, default 500) and `offset`, and
-     return `X-Total-Count`. The dashboard shows the latest 50 rows of each
-     growing list.
+   - List endpoints take `limit` (1–5000, default 500) and `offset` (offset
+     semantics; there are no cursor tokens), and return `X-Total-Count`,
+     `X-Limit`, and `X-Offset`. The dashboard shows the latest 50 rows of
+     each growing list.
+   - Each replay step runs two transactions: a reconciliation guard that
+     writes nothing unless reconciliation fails, then the event transaction,
+     which commits every economic change together with its checkpoint. See
+     `docs/FA1B_INTEGRATION_SPEC.md` §13.
 9. **Migration 0004** is a Python migration: SQLite's create-copy-drop-rename
    table rebuild, run with foreign keys off, with `foreign_key_check`
    required empty before commit. It preserves every row, index, and trigger
    (recreated from their original text). Stored fixtures are backfilled as
    datasets. A failure rolls back completely and restores foreign-key
    enforcement.
+
+## 15. FA-1b (specified, not implemented)
+
+The FA-1b integration specification, including the owner's decisions on Git
+hygiene, the opening reference, exact prices, 1 s observations, the
+point-in-time universe, and the simulation window, is in
+`docs/FA1B_INTEGRATION_SPEC.md`. Its engine changes (E1–E7) take effect only
+after owner approval of that document's §14 decisions.

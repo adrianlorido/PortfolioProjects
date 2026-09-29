@@ -1,7 +1,10 @@
 # Historical market-data plan
 
-Status: **FA-1a (engine readiness) complete on branch
-`historical-engine-readiness`. FA-1b (vendor importer) not started.**
+Status: **FA-1a (engine readiness) complete and accepted (branch
+`historical-engine-readiness`). FA-1b is specified in
+[`FA1B_INTEGRATION_SPEC.md`](FA1B_INTEGRATION_SPEC.md) (branch
+`fa1b-integration-spec`) but not implemented. No data has been bought or
+downloaded.**
 
 This plan supersedes FA-1 in `docs/FUTURE_ASSIGNMENTS.md`. No data has been
 purchased or downloaded, no API keys are used, and no vendor importer exists.
@@ -65,8 +68,10 @@ Implemented as recorded in SPEC.md §14:
 - **Versioned exchange calendar** (`xnys_2023_2026_v1`) and a coverage report
   that never moves session boundaries.
 - **Bounded reads.** The dashboard shows the latest 50 rows per list; the API
-  takes `limit`/`offset` and returns `X-Total-Count`; the CLI lists are
-  bounded.
+  takes `limit`/`offset` (offset semantics; no cursors) and returns
+  `X-Total-Count`; the CLI lists are bounded. Replay events and run events
+  serve an offset as an equivalent key range internally (see
+  `FA1B_INTEGRATION_SPEC.md` §13.2).
 - **Migration 0004:** a safe table rebuild that preserves every row, index,
   trigger, and result of a Step 7 database (tested on a real Step 7 dump).
 
@@ -123,9 +128,12 @@ day at 1 s), 344 risk rejections: 34.3 s, **1.47 ms/event**, first/last 10%
   the time, and per-event cost is flat at 1.35–1.56 ms, under the 3 ms
   aspiration. Step 7 was quadratic: 8× the events took 36× the time.
 - Economic results are identical in every run, on both engines.
-- Where the ~1.5 ms goes (profile at 4,000 quotes): ~30% two durable commits
-  per event (the reconciliation guard's transaction and the event's own),
-  ~20% building latest-quote models for the strategy (one per contract per
+- Where the ~1.5 ms goes (profile at 4,000 quotes): ~30% transaction
+  overhead: two transactions per event, of which **only the event's own
+  writes** (one durable `COMMIT`). The reconciliation guard's transaction
+  writes nothing unless reconciliation fails; see
+  `FA1B_INTEGRATION_SPEC.md` §13.1, which corrects the earlier "two durable
+  commits" wording. ~20% building latest-quote models for the strategy (one per contract per
   quote), ~18% reconciliation (twice per event, unchanged), and the rest SQL
   and validation.
 - **Memory:** replay itself uses constant memory (event-stream rows: ~41.7 MB
@@ -172,6 +180,11 @@ Scope when approved:
   never chosen from the day's eventual high or low.
 
 ## Decisions needed before vendor integration (FA-1b)
+
+Superseded by the owner's FA-1b decisions (Git hygiene, opening reference,
+exact prices, 1 s observations, point-in-time universe, simulation window)
+and by the remaining decisions in `FA1B_INTEGRATION_SPEC.md` §14. The list
+below is kept for history.
 
 1. **Vendor and budget** (decision 1). Databento is a candidate only.
    Nothing may be bought or downloaded until this is approved.

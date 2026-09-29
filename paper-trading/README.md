@@ -25,8 +25,11 @@ is not a tested or profitable trading strategy.**
 - [`docs/FUTURE_ASSIGNMENTS.md`](docs/FUTURE_ASSIGNMENTS.md): scoped next work
   packages (market data, evaluation, dashboard) and deferred items.
 - [`docs/HISTORICAL_DATA_PLAN.md`](docs/HISTORICAL_DATA_PLAN.md): historical
-  data plan, owner decisions, FA-1a results (benchmarks), and the decisions
-  still needed before a vendor importer (FA-1b).
+  data plan, owner decisions, and FA-1a results (benchmarks).
+- [`docs/FA1B_INTEGRATION_SPEC.md`](docs/FA1B_INTEGRATION_SPEC.md): the
+  vendor-importer specification (confirmed vs unresolved vendor facts,
+  diagnostic dataset, cost-estimate request, importer design, acceptance
+  tests, remaining decisions). Not implemented.
 - [`STEP6_VALIDATION.md`](STEP6_VALIDATION.md): verification matrix and
   evidence.
 
@@ -365,8 +368,10 @@ Errors return JSON `{"error": CODE, "detail": ...}`:
 
 **Paging.** List endpoints (`replay/events`, `quotes`, `rejected-inputs`,
 `proposals`, `risk-decisions`, `orders`, `fills`, `ledger`, `run-events`)
-take `limit` (1–5000, default 500) and `offset` (default 0). They still
-return a JSON array, with the total in the `X-Total-Count` header. The
+take `limit` (1–5000, default 500) and `offset` (default 0); there are no
+cursor tokens. They still return a JSON array in a fixed ascending order,
+with `X-Total-Count`, `X-Limit`, and `X-Offset` headers; an offset past the
+end returns `[]`. The
 dashboard shows the latest 50 rows of each list.
 
 Command bodies must be JSON. The server listens on `127.0.0.1` only.

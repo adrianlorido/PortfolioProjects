@@ -3,7 +3,8 @@
 Status after FA-1a (historical-data engine readiness, branch
 `historical-engine-readiness`, based on `paper-trading-step7`). The Step 7
 commands below are unchanged and were re-run on this branch. FA-1b (a vendor
-importer) has **not** started: see `docs/HISTORICAL_DATA_PLAN.md`.
+importer) is specified in `docs/FA1B_INTEGRATION_SPEC.md` but **not**
+implemented; no vendor data has been bought or downloaded.
 
 ## What the app does
 
@@ -56,6 +57,7 @@ $0.65, sell @ $4.80 − $0.65, realized **$78.70**, final cash and equity
 | `paper-trading-step6` | Stress and E2E verification (`STEP6_VALIDATION.md`), fixes F1–F3, rules 5–6 resolved |
 | `paper-trading-step7` | Handoff documentation (based on `paper-trading-step6`) |
 | `historical-engine-readiness` | **FA-1a**: datasets, data classes, manifests, calendar, indexed replay, paging, migration 0004 (based on `paper-trading-step7`) |
+| `fa1b-integration-spec` | FA-1b specification only: `docs/FA1B_INTEGRATION_SPEC.md` (documentation; based on `historical-engine-readiness`) |
 
 Each step branch was created from the previous one, so the latest branch
 contains everything.
