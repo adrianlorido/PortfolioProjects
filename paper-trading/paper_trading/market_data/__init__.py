@@ -1,17 +1,16 @@
-"""Market data boundary (not implemented; arrives in Step 4).
+"""Market data (Step 4: sample-data mode).
 
 Owns contract definitions, normalized quotes, and source metadata. Supplies
 data; cannot place orders. Only the registered synthetic fixture provider
-(``synthetic_fixture_v1``) will be accepted; there is no live data adapter.
+(``synthetic_fixture_v1``) is accepted; there is no live data adapter.
 
-Planned interface (SPEC.md Section 6)::
+  - ``fixtures``: fixture format, canonical checksum, structure and contract
+    scope validation, bundled fixture registry.
+  - ``intake``: pure quote-input validation with ordered reason codes and the
+    source-sequence rule.
 
-    next_event(run_id, checkpoint) -> quote | session boundary
-    get_contract(contract_id) -> OptionContract
-
-Quote ingestion must enforce SPEC.md Section 3 quote validation and
-clarification 2: when a quote carries ``session_reference_cents`` it must equal
-the run's stored reference exactly.
+Replay itself (clock, cursor, persistence) is coordinated by
+``paper_trading.app.replay``.
 """
 
 from paper_trading.market_data.interface import MarketDataProvider  # noqa: F401

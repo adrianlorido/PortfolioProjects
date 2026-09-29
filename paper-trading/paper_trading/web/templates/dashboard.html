@@ -47,34 +47,131 @@
   </div>
 </section>
 
+{% set r = d.replay %}
+{% set latest = d.market.latest_quotes[0] if d.market.latest_quotes else None %}
+<section class="panel" aria-labelledby="replay-h" id="replay-panel">
+  <div class="panel-head">
+    <h2 id="replay-h">Sample-data replay</h2>
+    {% if r %}<span class="pill pill-{{ r.status | lower }}" id="replay-status">{{ r.status }}</span>{% endif %}
+  </div>
+  {% if r %}
+  <p class="data-label">{{ r.data_label }}</p>
+  <dl class="kv">
+    <dt>Fixture</dt><dd><code>{{ r.fixture_id }}</code> v{{ r.fixture_version }}
+      <span class="muted small" title="{{ r.fixture_checksum }}">{{ r.fixture_checksum[:19] }}…</span></dd>
+    <dt>Simulated time</dt><dd><strong>{{ d.market.simulated_clock }}</strong></dd>
+    <dt>Progress</dt><dd>
+      <progress max="{{ r.total_events }}" value="{{ r.processed_events }}"></progress>
+      {{ r.processed_events }} / {{ r.total_events }} events</dd>
+    <dt>Next event</dt><dd>{% if r.next_event %}#{{ r.next_position }} {{ r.next_event.event_type }}
+      {% if r.next_event.ref %}<code>{{ r.next_event.ref }}</code>{% endif %} at {{ r.next_event.at }}
+      {% else %}None — all fixture events replayed{% endif %}</dd>
+    <dt>Reference price</dt><dd>{{ r.session_reference_cents | usd }} (fixed session reference)</dd>
+  </dl>
+  {% if r.status == 'EXHAUSTED' %}
+  <p class="notice">Replay exhausted: every fixture event was processed. No trading workflow ran,
+    so this is <strong>not</strong> a completed demonstration trade.</p>
+  {% endif %}
+  <div class="controls">
+    <button type="button" data-command="step" {{ 'disabled' if r.status != 'ACTIVE' }}>Step one event</button>
+    {% if r.status == 'PAUSED' %}
+    <button type="button" data-command="resume">Resume</button>
+    {% else %}
+    <button type="button" data-command="pause" {{ 'disabled' if r.status != 'ACTIVE' }}>Pause</button>
+    {% endif %}
+    <button type="button" data-command="run-to-end" {{ 'disabled' if r.status != 'ACTIVE' }}>Replay to end</button>
+  </div>
+  {% else %}
+  <p>No fixture loaded. Load the bundled synthetic fixture to replay the SPEC.md worked-example quotes.</p>
+  <div class="controls">
+    <button type="button" data-command="load" data-fixture-id="{{ default_fixture }}">Load sample fixture ({{ default_fixture }})</button>
+  </div>
+  {% endif %}
+  <p class="command-msg muted small" id="command-msg" role="status" aria-live="polite"></p>
+</section>
+
 <div class="two-col">
   <section class="panel" aria-labelledby="wl-h">
     <h2 id="wl-h">Watchlist</h2>
     <ul class="watchlist">
-      {% for sym in d.run.watchlist %}<li><strong>{{ sym }}</strong> <span class="muted">No quotes loaded</span></li>{% endfor %}
+      {% for sym in d.run.watchlist %}<li><strong>{{ sym }}</strong>
+        {% if latest %}{{ latest.underlying_price_cents | usd }}
+          <span class="muted small">at {{ latest.underlying_observed_at }}</span>
+        {% else %}<span class="muted">No accepted quotes</span>{% endif %}</li>{% endfor %}
     </ul>
   </section>
-  <section class="panel" aria-labelledby="run-h">
-    <h2 id="run-h">Run parameters</h2>
+  <section class="panel" aria-labelledby="mkt-h">
+    <h2 id="mkt-h">Latest accepted quote</h2>
+    {% if latest %}
     <dl class="kv">
-      <dt>Session</dt><dd>{{ d.session_local_date }} ({{ d.run.session_timezone }})<br>
-        <span class="muted small">{{ d.run.session_start }} → {{ d.run.session_end }}</span></dd>
-      <dt>Strategy</dt><dd>{{ d.run.strategy_id }} v{{ d.run.strategy_version }}</dd>
-      <dt>Risk ceiling</dt><dd>{{ d.run.entry_risk_limit_cents | usd }} per entry</dd>
-      <dt>Fees</dt><dd>{{ d.run.fee_per_contract_cents | usd }} per contract per fill ({{ d.run.fee_schedule_version }})</dd>
-      <dt>Fixture</dt><dd>{{ d.run.fixture_id or 'Not loaded' }}</dd>
+      <dt>Contract</dt><dd><code>{{ latest.contract_id }}</code></dd>
+      <dt>Bid / Ask</dt><dd><strong>{{ latest.bid_cents | usd }} / {{ latest.ask_cents | usd }}</strong>
+        <span class="muted small">size {{ latest.bid_size }} × {{ latest.ask_size }}</span></dd>
+      <dt>Observed</dt><dd>{{ latest.observed_at }} <span class="muted small">(source seq {{ latest.source_sequence }})</span></dd>
+      <dt>Freshness</dt><dd><span class="pill {{ 'pill-ok' if latest.freshness == 'FRESH' else 'pill-bad' }}">{{ latest.freshness }}</span>
+        {{ '%g' % latest.age_seconds }} s old on the simulated clock (limit {{ latest.limit_seconds }} s)</dd>
     </dl>
+    <p class="muted small">Only accepted quotes appear here; rejected inputs never replace this state.</p>
+    {% else %}
+    <p class="muted">No accepted quotes yet.</p>
+    {% endif %}
   </section>
 </div>
 
+<section class="panel" aria-labelledby="run-h">
+  <h2 id="run-h">Run parameters</h2>
+  <dl class="kv">
+    <dt>Session</dt><dd>{{ d.session_local_date }} ({{ d.run.session_timezone }})
+      <span class="muted small">{{ d.run.session_start }} → {{ d.run.session_end }}</span></dd>
+    <dt>Strategy</dt><dd>{{ d.run.strategy_id }} v{{ d.run.strategy_version }}</dd>
+    <dt>Risk ceiling</dt><dd>{{ d.run.entry_risk_limit_cents | usd }} per entry</dd>
+    <dt>Fees</dt><dd>{{ d.run.fee_per_contract_cents | usd }} per contract per fill ({{ d.run.fee_schedule_version }})</dd>
+  </dl>
+</section>
+
 <section class="panel" aria-labelledby="ctl-h">
-  <h2 id="ctl-h">Controls</h2>
+  <h2 id="ctl-h">Trading controls</h2>
   <div class="controls">
-    <button type="button" disabled>Start run — Not implemented</button>
-    <button type="button" disabled>Step — Not implemented</button>
+    <button type="button" disabled>Start trading — Not implemented</button>
     <button type="button" disabled>Request close — Not implemented</button>
   </div>
-  <p class="muted small">The trading workflow arrives in Step 5. No orders can be created yet.</p>
+  <p class="muted small">The trading workflow arrives in Step 5. Replay creates no proposals, orders, fills, or positions.</p>
+</section>
+
+<section class="panel" aria-labelledby="tl-h">
+  <h2 id="tl-h">Replay events</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th class="num">#</th><th class="num">Event seq</th><th>Scheduled (simulated)</th><th>Type</th>
+      <th>Fixture ref</th><th class="num">Source seq</th><th>Outcome</th><th>Reasons</th></tr></thead>
+    <tbody>
+    {% for e in d.replay_events %}
+      <tr><td class="num">{{ e.replay_position }}</td><td class="num">{{ e.event_sequence }}</td><td>{{ e.scheduled_at }}</td>
+        <td>{{ e.event_type }}</td><td><code>{{ e.fixture_ref or '' }}</code></td>
+        <td class="num">{{ e.source_sequence if e.source_sequence is not none else '' }}</td>
+        <td><span class="pill {{ 'pill-ok' if e.outcome == 'ACCEPTED' else ('pill-bad' if e.outcome == 'REJECTED' else '') }}">{{ e.outcome }}</span></td>
+        <td>{{ e.reason_codes | join(', ') }}</td></tr>
+    {% else %}
+      <tr class="empty"><td colspan="8">No events replayed yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+
+<section class="panel" aria-labelledby="rej-h">
+  <h2 id="rej-h">Rejected inputs</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th class="num">#</th><th>Received (simulated)</th><th class="num">Source seq</th><th>Reasons</th><th>Raw input</th></tr></thead>
+    <tbody>
+    {% for x in d.rejected_inputs %}
+      <tr><td class="num">{{ x.replay_position }}</td><td>{{ x.received_at }}</td>
+        <td class="num">{{ x.source_sequence if x.source_sequence is not none else '—' }}</td>
+        <td><strong>{{ x.reason_codes | join(', ') }}</strong></td>
+        <td><details><summary>show</summary><pre class="raw">{{ x.raw_input | tojson(indent=2) }}</pre></details></td></tr>
+    {% else %}
+      <tr class="empty"><td colspan="5">No rejected inputs.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
 </section>
 
 <section class="panel" aria-labelledby="pos-h">

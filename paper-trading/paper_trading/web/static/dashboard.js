@@ -1,5 +1,6 @@
-// Refreshes account figures from /api/account. Display only: values come
-// from the backend as integer cents and are formatted, never recalculated.
+// Refreshes account figures from /api/account and sends replay commands to
+// the backend. Display only: values come from the backend as integer cents and
+// are formatted, never recalculated.
 (function () {
   "use strict";
 
@@ -29,6 +30,55 @@
     }
   }
 
+  // --- Replay commands ---------------------------------------------------
+  // One idempotency key per click. Network failures are retried with the SAME
+  // key, so the server applies the command at most once.
+  function newKey() {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") return "ui-" + window.crypto.randomUUID();
+    return "ui-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+  }
+
+  function post(url, body, attemptsLeft) {
+    return fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body),
+    }).catch(function (err) {
+      if (attemptsLeft > 0) return post(url, body, attemptsLeft - 1);
+      throw err;
+    });
+  }
+
+  var msg = document.getElementById("command-msg");
+  document.querySelectorAll("[data-command]").forEach(function (el) {
+    el.addEventListener("click", function () {
+      var command = el.getAttribute("data-command");
+      var body = command === "load"
+        ? { fixture_id: el.getAttribute("data-fixture-id") }
+        : { idempotency_key: newKey() };
+      var enabled = Array.prototype.filter.call(
+        document.querySelectorAll("[data-command]"), function (b) { return !b.disabled; });
+      enabled.forEach(function (b) { b.disabled = true; });
+      if (msg) { msg.className = "command-msg muted small"; msg.textContent = "Sending " + command + "…"; }
+      post("/api/replay/" + command, body, 2)
+        .then(function (r) {
+          return r.json().then(function (data) {
+            if (!r.ok) {
+              var detail = data && (data.detail || data.error);
+              throw new Error(typeof detail === "string" ? detail : (JSON.stringify(detail) || "HTTP " + r.status));
+            }
+            return data;
+          });
+        })
+        .then(function () { window.location.reload(); })
+        .catch(function (err) {
+          if (msg) { msg.className = "command-msg small error"; msg.textContent = command + " failed: " + err.message; }
+          enabled.forEach(function (b) { b.disabled = false; });
+        });
+    });
+  });
+
+  // --- Refresh -----------------------------------------------------------
   var btn = document.getElementById("refresh");
   if (!btn) return;
   btn.addEventListener("click", function () {

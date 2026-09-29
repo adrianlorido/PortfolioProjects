@@ -180,7 +180,7 @@ def test_transaction_rolls_back_on_error(conn, initialized):
 def test_migrations_idempotent(conn, initialized):
     assert migrator.migrate(conn) == []
     version, pending = migrator.status(conn)
-    assert version == 1 and pending == []
+    assert version == 2 and pending == []
 
 
 def test_edited_migration_detected(conn, initialized):

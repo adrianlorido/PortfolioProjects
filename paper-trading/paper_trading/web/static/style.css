@@ -97,3 +97,16 @@ th { color: var(--muted); font-weight: 600; font-size: 13px; }
 tr.empty td { text-align: left; color: var(--muted); padding: 18px; white-space: normal; }
 
 .cmd { background: var(--neutral-bg); padding: 10px 12px; border-radius: 6px; overflow-x: auto; }
+
+.panel-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
+.panel-head h2 { margin: 0; }
+.data-label { margin: 0 0 12px; font-weight: 700; letter-spacing: 0.03em; color: var(--bad-text); font-size: 13px; }
+.pill-active { background: var(--ok-bg); color: var(--ok-text); }
+.pill-paused { background: var(--neutral-bg); }
+.pill-exhausted { background: var(--neutral-bg); color: var(--muted); }
+progress { width: 160px; vertical-align: middle; margin-right: 6px; }
+.notice { background: var(--neutral-bg); border-left: 3px solid var(--accent); padding: 8px 12px; border-radius: 4px; }
+.controls + .command-msg { margin-top: 10px; min-height: 1.2em; }
+.command-msg.error { color: var(--bad-text); }
+pre.raw { margin: 6px 0 0; font-size: 12px; white-space: pre; }
+details summary { cursor: pointer; color: var(--accent); }

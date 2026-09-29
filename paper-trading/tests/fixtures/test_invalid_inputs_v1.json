@@ -1,0 +1,233 @@
+{
+  "fixture_schema_version": "1.0",
+  "fixture_id": "test_invalid_inputs",
+  "fixture_version": "1.0.0",
+  "checksum": "sha256:024fa3bdbe67067858f893256955f3a75387dc22a8e916b1f337942a19c50a82",
+  "source": "synthetic_fixture_v1",
+  "is_sample": true,
+  "data_label": "SYNTHETIC SAMPLE DATA - NOT REAL MARKET DATA - PAPER ONLY",
+  "description": "TEST FIXTURE: intentionally invalid quote inputs between valid ones. Not for normal use.",
+  "underlying": "SPY",
+  "session": {
+    "timezone": "America/New_York",
+    "start": "2026-09-29T13:30:00Z",
+    "end": "2026-09-29T20:00:00Z"
+  },
+  "session_reference_cents": 59700,
+  "contracts": [
+    {
+      "schema_version": "1.0",
+      "contract_id": "SPY_20261030_C_60000",
+      "underlying": "SPY",
+      "expiration_date": "2026-10-30",
+      "option_type": "CALL",
+      "strike_cents": 60000,
+      "currency": "USD",
+      "multiplier": 100,
+      "deliverable": "100_SPY_SHARES",
+      "exercise_style": "AMERICAN",
+      "settlement_type": "PHYSICAL",
+      "adjusted": false
+    }
+  ],
+  "events": [
+    {
+      "event_type": "SESSION_OPEN",
+      "at": "2026-09-29T13:30:00Z",
+      "ref": "open"
+    },
+    {
+      "event_type": "QUOTE",
+      "at": "2026-09-29T14:00:00Z",
+      "ref": "valid_1",
+      "input": {
+        "source": "synthetic_fixture_v1",
+        "is_sample": true,
+        "source_sequence": 1,
+        "contract_id": "SPY_20261030_C_60000",
+        "observed_at": "2026-09-29T14:00:00Z",
+        "bid_cents": 390,
+        "ask_cents": 400,
+        "bid_size": 10,
+        "ask_size": 10,
+        "underlying_price_cents": 60000,
+        "underlying_observed_at": "2026-09-29T14:00:00Z",
+        "session_reference_cents": 59700
+      }
+    },
+    {
+      "event_type": "QUOTE",
+      "at": "2026-09-29T14:00:10Z",
+      "ref": "stale",
+      "input": {
+        "source": "synthetic_fixture_v1",
+        "is_sample": true,
+        "source_sequence": 2,
+        "contract_id": "SPY_20261030_C_60000",
+        "observed_at": "2026-09-29T14:00:05Z",
+        "bid_cents": 111,
+        "ask_cents": 121,
+        "bid_size": 10,
+        "ask_size": 10,
+        "underlying_price_cents": 60000,
+        "underlying_observed_at": "2026-09-29T14:00:10Z",
+        "session_reference_cents": 59700
+      }
+    },
+    {
+      "event_type": "QUOTE",
+      "at": "2026-09-29T14:00:11Z",
+      "ref": "future",
+      "input": {
+        "source": "synthetic_fixture_v1",
+        "is_sample": true,
+        "source_sequence": 3,
+        "contract_id": "SPY_20261030_C_60000",
+        "observed_at": "2026-09-29T14:00:15Z",
+        "bid_cents": 222,
+        "ask_cents": 232,
+        "bid_size": 10,
+        "ask_size": 10,
+        "underlying_price_cents": 60000,
+        "underlying_observed_at": "2026-09-29T14:00:11Z",
+        "session_reference_cents": 59700
+      }
+    },
+    {
+      "event_type": "QUOTE",
+      "at": "2026-09-29T14:00:12Z",
+      "ref": "crossed",
+      "input": {
+        "source": "synthetic_fixture_v1",
+        "is_sample": true,
+        "source_sequence": 4,
+        "contract_id": "SPY_20261030_C_60000",
+        "observed_at": "2026-09-29T14:00:12Z",
+        "bid_cents": 410,
+        "ask_cents": 400,
+        "bid_size": 10,
+        "ask_size": 10,
+        "underlying_price_cents": 60000,
+        "underlying_observed_at": "2026-09-29T14:00:12Z",
+        "session_reference_cents": 59700
+      }
+    },
+    {
+      "event_type": "QUOTE",
+      "at": "2026-09-29T14:00:13Z",
+      "ref": "duplicate",
+      "input": {
+        "source": "synthetic_fixture_v1",
+        "is_sample": true,
+        "source_sequence": 1,
+        "contract_id": "SPY_20261030_C_60000",
+        "observed_at": "2026-09-29T14:00:13Z",
+        "bid_cents": 333,
+        "ask_cents": 343,
+        "bid_size": 10,
+        "ask_size": 10,
+        "underlying_price_cents": 60000,
+        "underlying_observed_at": "2026-09-29T14:00:13Z",
+        "session_reference_cents": 59700
+      }
+    },
+    {
+      "event_type": "QUOTE",
+      "at": "2026-09-29T14:00:14Z",
+      "ref": "valid_5",
+      "input": {
+        "source": "synthetic_fixture_v1",
+        "is_sample": true,
+        "source_sequence": 5,
+        "contract_id": "SPY_20261030_C_60000",
+        "observed_at": "2026-09-29T14:00:14Z",
+        "bid_cents": 395,
+        "ask_cents": 405,
+        "bid_size": 10,
+        "ask_size": 10,
+        "underlying_price_cents": 60010,
+        "underlying_observed_at": "2026-09-29T14:00:14Z",
+        "session_reference_cents": 59700
+      }
+    },
+    {
+      "event_type": "QUOTE",
+      "at": "2026-09-29T14:00:15Z",
+      "ref": "out_of_order",
+      "input": {
+        "source": "synthetic_fixture_v1",
+        "is_sample": true,
+        "source_sequence": 4,
+        "contract_id": "SPY_20261030_C_60000",
+        "observed_at": "2026-09-29T14:00:15Z",
+        "bid_cents": 444,
+        "ask_cents": 454,
+        "bid_size": 10,
+        "ask_size": 10,
+        "underlying_price_cents": 60000,
+        "underlying_observed_at": "2026-09-29T14:00:15Z",
+        "session_reference_cents": 59700
+      }
+    },
+    {
+      "event_type": "QUOTE",
+      "at": "2026-09-29T14:00:16Z",
+      "ref": "missing_size",
+      "input": {
+        "source": "synthetic_fixture_v1",
+        "is_sample": true,
+        "source_sequence": 6,
+        "contract_id": "SPY_20261030_C_60000",
+        "observed_at": "2026-09-29T14:00:16Z",
+        "bid_cents": 555,
+        "ask_cents": 565,
+        "bid_size": 10,
+        "underlying_price_cents": 60000,
+        "underlying_observed_at": "2026-09-29T14:00:16Z",
+        "session_reference_cents": 59700
+      }
+    },
+    {
+      "event_type": "QUOTE",
+      "at": "2026-09-29T14:00:17Z",
+      "ref": "reference_mismatch",
+      "input": {
+        "source": "synthetic_fixture_v1",
+        "is_sample": true,
+        "source_sequence": 7,
+        "contract_id": "SPY_20261030_C_60000",
+        "observed_at": "2026-09-29T14:00:17Z",
+        "bid_cents": 666,
+        "ask_cents": 676,
+        "bid_size": 10,
+        "ask_size": 10,
+        "underlying_price_cents": 60000,
+        "underlying_observed_at": "2026-09-29T14:00:17Z",
+        "session_reference_cents": 59800
+      }
+    },
+    {
+      "event_type": "QUOTE",
+      "at": "2026-09-29T14:00:18Z",
+      "ref": "valid_8_no_reference",
+      "input": {
+        "source": "synthetic_fixture_v1",
+        "is_sample": true,
+        "source_sequence": 8,
+        "contract_id": "SPY_20261030_C_60000",
+        "observed_at": "2026-09-29T14:00:18Z",
+        "bid_cents": 396,
+        "ask_cents": 406,
+        "bid_size": 10,
+        "ask_size": 10,
+        "underlying_price_cents": 60020,
+        "underlying_observed_at": "2026-09-29T14:00:18Z"
+      }
+    },
+    {
+      "event_type": "SESSION_CLOSE",
+      "at": "2026-09-29T20:00:00Z",
+      "ref": "close"
+    }
+  ]
+}

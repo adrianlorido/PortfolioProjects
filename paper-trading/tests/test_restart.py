@@ -38,14 +38,16 @@ def get_json(port: int, path: str) -> dict:
         return json.loads(r.read())
 
 
-def serve_and_read(env: dict, port: int) -> tuple[dict, dict]:
+def serve_and_read(env: dict, port: int, *paths: str) -> tuple[dict, ...]:
+    """Start the server in a new process, GET each path, then stop it."""
+    paths = paths or ("/health", "/api/account")
     proc = subprocess.Popen([sys.executable, "-m", "paper_trading", "serve"], cwd=PROJECT, env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     try:
         deadline = time.time() + 20
         while True:
             try:
-                return get_json(port, "/health"), get_json(port, "/api/account")
+                return tuple(get_json(port, p) for p in paths)
             except OSError:
                 if time.time() > deadline or proc.poll() is not None:
                     out = proc.stdout.read().decode() if proc.poll() is not None else ""
@@ -83,3 +85,66 @@ def test_serve_without_database_fails_clearly(tmp_path):
     assert result.returncode == 2
     assert "init-sample" in result.stderr
     assert not db.exists()
+
+
+
+def test_replay_progress_survives_process_restarts(tmp_path):
+    """Each CLI call is a separate process; the server is started between steps."""
+    db = tmp_path / "replay.sqlite3"
+    port = free_port()
+    env = env_for(db, port)
+    assert cli(["init-sample"], env).returncode == 0
+
+    loaded = cli(["load-fixture"], env)
+    assert loaded.returncode == 0, loaded.stderr
+    assert "Loaded fixture sample_spy_worked_trade v1.0.0 (6 events)" in loaded.stdout
+    assert "Already loaded" in cli(["load-fixture"], env).stdout
+
+    first = cli(["step", "--key", "step-1"], env)
+    assert first.returncode == 0 and '"fixture_ref": "open"' in first.stdout
+    second = cli(["step", "--key", "step-2"], env)
+    assert '"fixture_ref": "q1"' in second.stdout
+    retry = cli(["step", "--key", "step-2"], env)  # retried command in a new process
+    assert '"idempotent_replay": true' in retry.stdout and '"fixture_ref": "q1"' in retry.stdout
+
+    (state,) = serve_and_read(env, port, "/api/replay")
+    assert state["replay"]["processed_events"] == 2 and state["replay"]["next_position"] == 3
+    assert state["simulated_clock"] == "2026-09-29T14:00:00Z"
+    (state_again,) = serve_and_read(env, port, "/api/replay")  # a second server restart
+    assert state_again == state
+
+    final = cli(["replay-to-end"], env)
+    assert final.returncode == 0 and '"steps_executed": 4' in final.stdout
+    status = cli(["replay-status"], env).stdout
+    assert "EXHAUSTED  6/6 events" in status
+    assert status.count(" ACCEPTED") == 4
+
+    summary = cli(["status"], env).stdout
+    assert "cash $100,000.00" in summary and "equity $100,000.00" in summary and "revision 1" in summary
+    assert "reconciliation: PASS" in summary
+
+
+def test_step3_database_upgrades_without_losing_data(tmp_path, monkeypatch):
+    """A database created by Step 3 (schema v1) is refused until migrated, then keeps its data."""
+    from paper_trading.app.coordinator import init_sample
+    from paper_trading.config import Settings
+    from paper_trading.storage import migrator
+    from paper_trading.storage.db import connect
+
+    db = tmp_path / "step3.sqlite3"
+    env = env_for(db, free_port())
+    only_v1 = migrator.discover()[:1]
+    monkeypatch.setattr(migrator, "discover", lambda: only_v1)
+    conn = connect(db, create=True)
+    result = init_sample(conn, Settings(_env_file=None, db_path=db))
+    conn.close()
+    monkeypatch.undo()
+
+    refused = cli(["load-fixture"], env)
+    assert refused.returncode == 2 and "pending migrations [2]" in refused.stderr
+
+    migrated = cli(["migrate"], env)
+    assert migrated.returncode == 0 and "Applied migrations: [2]" in migrated.stdout
+    summary = cli(["status"], env).stdout
+    assert result.run_id in summary and "cash $100,000.00" in summary and "PASS" in summary
+    assert cli(["load-fixture"], env).returncode == 0

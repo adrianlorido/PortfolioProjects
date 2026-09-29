@@ -41,7 +41,7 @@ def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
 
 
-def _utc_now() -> str:
+def utc_now() -> str:
     return format_utc(datetime.now(timezone.utc).replace(microsecond=0))
 
 
@@ -95,7 +95,7 @@ def init_sample(conn: sqlite3.Connection, settings: Settings) -> InitResult:
             stored = json.loads(prior["result_json"])
             return InitResult(**{**stored, "created": False})
 
-        now = _utc_now()
+        now = utc_now()
         run = Run(
             schema_version=SCHEMA_VERSION,
             run_id=new_id("run"),

@@ -527,8 +527,8 @@ Contradictions and gaps found while implementing, and how they were resolved.
    every quote field is required; clarification 2 says "if a quote includes
    it". Clarification wins: the field is optional (may be omitted or `null`)
    on a quote; when present it must equal the run's stored reference exactly.
-   The quote model validates shape; the exact-match check needs the run and
-   belongs to quote ingestion (Step 4).
+   The quote model validates shape; the exact-match check against the run's
+   pinned reference is done at quote intake (implemented in Step 4, §12).
 2. **Run fixture metadata before a fixture exists.** A run must pin its fixture
    version, checksum, and session reference price, but the fixture is built in
    Step 4. These run columns are nullable while the run is `READY` and a
@@ -562,3 +562,56 @@ Contradictions and gaps found while implementing, and how they were resolved.
    added in Step 3.
 10. **Step numbering.** See clarification 7. Section 9's original sequence
     is superseded by it.
+
+---
+
+## 12. Implementation resolutions (Step 4: sample-data mode)
+
+1. **Fixture format.** One JSON document per fixture version with metadata,
+   in-scope contracts, and an ordered event timeline: `SESSION_OPEN` at the
+   session start, `QUOTE` events, and `SESSION_CLOSE` at the session end.
+   Each event's `at` is its scheduled simulated arrival time.
+2. **Checksum.** `sha256:` + SHA-256 of the canonical JSON (sorted keys, no
+   whitespace, UTF-8) of the document without its `checksum` field.
+   Formatting changes do not alter it; any value change does. Changed content
+   requires a new `fixture_version`: the same id and version with different
+   content is refused.
+3. **Load-time vs intake-time validation.** Loading validates structure,
+   checksum, metadata, contract scope (Section 4), and that the fixture's
+   session equals the run's pinned session. Quote content is validated at
+   intake, so invalid inputs are recorded with reasons rather than failing
+   the load.
+4. **Pinning.** Loading sets the run's fixture id, version, checksum, and
+   session reference price once. The database refuses later changes in any
+   status. A different fixture requires a new run (new sample-run key).
+   Loading the same fixture again is a no-op.
+5. **Clock.** The simulated clock moves only to each event's scheduled time.
+   Observation timestamps are validated against it and never set it. The
+   database refuses to move the clock or checkpoint backward.
+6. **Numbering.** `replay_position` is the fixture event index and the replay
+   cursor. `run_events.event_sequence` is the run's audit order (setup,
+   replay, pause/resume). `source_sequence` is provider data, validated per
+   run and source against accepted quotes only (see `market_data/intake.py`).
+   Rejected inputs never advance the high-water mark.
+7. **Rejected inputs.** Rejected inputs are stored as received, with ordered
+   reason codes, in `rejected_inputs`, separate from `market_quotes`. Market
+   state reads only accepted quotes.
+8. **Staleness boundary.** A quote is stale when it is more than 2 simulated
+   seconds older than the clock (exactly 2 seconds is still fresh). Future
+   observations are rejected. Dashboard freshness uses the same limit on the
+   simulated clock.
+9. **Run status during replay.** The run stays `READY` in Step 4. Replay
+   progress is tracked in `replay_state` (`ACTIVE`/`PAUSED`/`EXHAUSTED`).
+   Exhaustion is recorded as a `REPLAY_EXHAUSTED` run event and is not a
+   `COMPLETED` run, because no trading workflow runs.
+10. **Commands.** Step, pause, resume, and run-to-end carry idempotency keys
+    stored in `command_log`, with the SPEC Section 3 conflict semantics.
+    Run-to-end commits one transaction per event, so an interruption keeps
+    completed events and a retry with the same key resumes. Its command
+    record is written once at the end.
+11. **Worked-example gap.** Section 7 gives no underlying price for q3/q4; the
+    fixture uses $601.50 (60150 cents). Sizes are 10 contracts on both sides.
+    The contract ID is `SPY_20261030_C_60000`.
+12. **HTTP loading.** The API loads only fixtures bundled in
+    `paper-trading/fixtures/`, by id. Test fixtures and arbitrary paths are
+    CLI-only.

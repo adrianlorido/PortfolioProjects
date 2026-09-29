@@ -20,7 +20,7 @@ def test_health(client, initialized):
     body = client.get("/health").json()
     assert body["status"] == "ok"
     assert body["mode"] == "SAMPLE_PAPER" and body["is_sample"] is True
-    assert body["db_schema_version"] == 1
+    assert body["db_schema_version"] == 2
     assert body["run_initialized"] is True and body["run_id"] == initialized.run_id
 
 
@@ -50,11 +50,15 @@ def test_empty_collections(client, path):
     assert r.status_code == 200 and r.json() == []
 
 
-def test_no_write_endpoints(client):
-    for path in ["/api/orders", "/api/account", "/api/positions"]:
+def test_only_replay_commands_accept_writes(client):
+    for path in ["/api/orders", "/api/account", "/api/positions", "/api/closed-trades", "/api/quotes"]:
         assert client.post(path, json={}).status_code == 405
-    write_routes = [r for r in client.app.routes if getattr(r, "methods", set()) - {"GET", "HEAD"}]
-    assert write_routes == []
+    write_paths = sorted(
+        r.path for r in client.app.routes if getattr(r, "methods", set()) - {"GET", "HEAD"}
+    )
+    assert write_paths == sorted(
+        f"/api/replay/{c}" for c in ("load", "step", "pause", "resume", "run-to-end")
+    )
 
 
 def test_dashboard_renders_backend_values(client, initialized):
@@ -67,10 +71,11 @@ def test_dashboard_renders_backend_values(client, initialized):
     assert initialized.run_id in html
     assert "Ledger reconciled" in html
     assert "No positions." in html and "No orders." in html and "No closed trades." in html
-    assert "Not implemented" in html
+    assert "Start trading — Not implemented" in html
+    assert "Request close — Not implemented" in html
     assert "excludes exit fee" in html
-    # Execution controls are disabled.
-    assert html.count("disabled>") >= 3
+    # Trading controls are disabled buttons.
+    assert html.count("disabled>Start trading") == 1 and html.count("disabled>Request close") == 1
 
 
 def test_static_assets_served(client):
