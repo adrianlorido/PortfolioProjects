@@ -4,6 +4,8 @@
 {% set s = d.snapshot %}
 {% set is_trading = d.run.trading_enabled %}
 {% set open_positions = d.positions | selectattr('status', 'equalto', 'OPEN') | list %}
+{% set untrusted = not d.reconciliation.ok %}
+{% set blocked = is_trading and untrusted %}
 <header class="page-head" data-run-key="{{ run_key }}" id="page-head">
   <div>
     <h1>Options Paper Trading</h1>
@@ -47,8 +49,17 @@
 <section class="panel outcome outcome-paused"><h2>Run paused</h2><p>{{ d.run.status_reason }}</p></section>
 {% endif %}
 
-<section aria-labelledby="acct-h">
-  <h2 id="acct-h">Account <span class="muted small">as of {{ s.as_of }} (simulated) · revision <span data-field="account_revision">{{ s.account_revision }}</span></span></h2>
+{% if untrusted %}
+<section class="panel untrusted-banner" role="alert" aria-labelledby="untrusted-h">
+  <h2 id="untrusted-h">Books do not reconcile — figures on this page are UNTRUSTED</h2>
+  <p>Account figures, positions, orders, and trades below are diagnostic readings of stored data and may be wrong.
+    {% if is_trading %}Trading and replay commands are blocked until the books reconcile.{% endif %}</p>
+  <ul>{% for x in d.reconciliation.discrepancies %}<li>{{ x }}</li>{% endfor %}</ul>
+</section>
+{% endif %}
+
+<section aria-labelledby="acct-h" class="{{ 'untrusted' if untrusted }}">
+  <h2 id="acct-h">Account{% if untrusted %} <span class="pill pill-bad">UNTRUSTED</span>{% endif %} <span class="muted small">as of {{ s.as_of }} (simulated) · revision <span data-field="account_revision">{{ s.account_revision }}</span></span></h2>
   <div class="metrics">
     <div class="metric"><span class="label">Starting cash</span>
       <span class="value" data-field="starting_cash_cents">{{ s.starting_cash_cents | usd }}</span></div>
@@ -103,11 +114,11 @@
   {% elif is_trading and d.run.status == 'READY' %}
   <p class="notice">Trading run not started. Start it to replay the fixture through the trading workflow.</p>
   {% endif %}
-  {% set can_step = r.status == 'ACTIVE' and (not is_trading or d.run.status == 'RUNNING') %}
+  {% set can_step = r.status == 'ACTIVE' and (not is_trading or d.run.status == 'RUNNING') and not blocked %}
   <div class="controls">
     <button type="button" data-command="step" {{ 'disabled' if not can_step }}>Step one event</button>
     {% if r.status == 'PAUSED' %}
-    <button type="button" data-command="resume">Resume</button>
+    <button type="button" data-command="resume" {{ 'disabled' if blocked }}>Resume</button>
     {% else %}
     <button type="button" data-command="pause" {{ 'disabled' if not can_step }}>Pause</button>
     {% endif %}
@@ -126,9 +137,9 @@
   <h2 id="ctl-h">Trading controls</h2>
   {% if is_trading %}
   <div class="controls">
-    <button type="button" data-command="start" {{ 'disabled' if d.run.status != 'READY' or not r }}>Start trading run</button>
+    <button type="button" data-command="start" {{ 'disabled' if d.run.status != 'READY' or not r or blocked }}>Start trading run</button>
     <button type="button" data-command="request-close"
-      {{ 'disabled' if not open_positions or d.run.status not in ('RUNNING', 'PAUSED') }}>Request close (manual exit)</button>
+      {{ 'disabled' if not open_positions or d.run.status not in ('RUNNING', 'PAUSED') or blocked }}>Request close (manual exit)</button>
   </div>
   <p class="muted small">Strategy <code>{{ d.run.strategy_id }}</code> v{{ d.run.strategy_version }} —
     <strong>demonstration rules only; not a tested or profitable strategy.</strong>
@@ -179,7 +190,8 @@
     <tbody>
     {% for p in d.positions %}
       {% set intent = d.exit_intents | selectattr('position_id', 'equalto', p.position_id) | first %}
-      <tr><td><code>{{ p.contract_id }}</code></td><td>{{ p.status }}</td><td class="num">{{ p.quantity }}</td>
+      <tr class="{{ 'untrusted-row' if p.untrusted }}"><td><code>{{ p.contract_id }}</code></td><td>{{ p.status }}{% if p.untrusted %}
+        <span class="pill pill-bad" title="{{ p.validation_error }}">UNTRUSTED</span>{% endif %}</td><td class="num">{{ p.quantity }}</td>
         <td class="num">{{ p.reserved_contracts }}</td>
         <td class="num">{{ p.entry_price_cents | usd }}</td><td class="num">{{ p.remaining_cost_basis_cents | usd }}</td>
         <td class="num">{{ p.market_value_cents | usd }}</td><td class="num">{{ p.unrealized_pnl_cents | usd_signed }}</td>
@@ -201,9 +213,10 @@
       <th>Status</th><th class="num">Reserved cash</th><th class="num">Reserved contracts</th><th>Expires</th><th>Reason</th></tr></thead>
     <tbody>
     {% for o in d.orders %}
-      <tr><td>{% if o.status == 'OPEN' and is_trading %}<button type="button" data-command="cancel" data-order-id="{{ o.order_id }}">Cancel</button>{% endif %}</td>
+      <tr class="{{ 'untrusted-row' if o.untrusted }}"><td>{% if o.status == 'OPEN' and is_trading %}<button type="button" data-command="cancel" data-order-id="{{ o.order_id }}" {{ 'disabled' if blocked }}>Cancel</button>{% endif %}</td>
         <td>{{ o.submitted_at }}</td><td>{{ o.intent }}</td>
-        <td class="num">{{ o.quantity }}</td><td class="num">{{ o.limit_cents | usd }}</td><td>{{ o.status }}</td>
+        <td class="num">{{ o.quantity }}</td><td class="num">{{ o.limit_cents | usd }}</td><td>{{ o.status }}{% if o.untrusted %}
+          <span class="pill pill-bad" title="{{ o.validation_error }}">UNTRUSTED</span>{% endif %}</td>
         <td class="num">{{ o.reserved_cash_cents | usd }}</td><td class="num">{{ o.reserved_contracts }}</td>
         <td>{{ o.expires_at }}</td><td>{{ o.terminal_reason or '' }}</td></tr>
     {% else %}
@@ -258,7 +271,8 @@
       <th class="num">Exit proceeds</th><th class="num">Fees</th><th class="num">Realized</th><th>Exit reason</th></tr></thead>
     <tbody>
     {% for t in d.closed_trades %}
-      <tr><td>{{ t.closed_at }}</td><td>{{ t.opened_at }}</td><td class="num">{{ t.quantity }}</td>
+      <tr class="{{ 'untrusted-row' if t.untrusted }}"><td>{{ t.closed_at }}{% if t.untrusted %}
+        <span class="pill pill-bad" title="{{ t.validation_error }}">UNTRUSTED</span>{% endif %}</td><td>{{ t.opened_at }}</td><td class="num">{{ t.quantity }}</td>
         <td class="num">{{ t.entry_cost_cents | usd }}</td><td class="num">{{ t.exit_net_proceeds_cents | usd }}</td>
         <td class="num">{{ t.total_fees_cents | usd }}</td><td class="num">{{ t.realized_pnl_cents | usd_signed }}</td>
         <td>{{ t.exit_reason }}</td></tr>

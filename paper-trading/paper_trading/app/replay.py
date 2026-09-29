@@ -392,33 +392,58 @@ def _step_in_transaction(conn: sqlite3.Connection, run_id: str) -> dict:
     return result
 
 
-def _pre_step_reconcile(conn: sqlite3.Connection, run_id: str) -> None:
-    """Trading runs reconcile before every event (so also on the first event after a restart)."""
+def _guard_trading_mutation(conn: sqlite3.Connection, run_id: str) -> None:
+    """Refuse any trading-run mutation while the books do not reconcile.
+
+    Applies to step, replay-to-end (before every event), start, resume,
+    request-close, and cancel, in every run status, including idempotent retries.
+    A RUNNING run is paused and the failure recorded (committed before raising);
+    runs in other statuses are left untouched. Replay-only runs have no trading
+    books and are not guarded. Pause is always allowed, and reads are never blocked.
+    """
+    reason = None
     with transaction(conn):
-        run = conn.execute("SELECT trading_enabled, status FROM runs WHERE run_id = ?", (run_id,)).fetchone()
-        reason = None
-        if run is not None and run["trading_enabled"] and run["status"] == "RUNNING":
-            reason = trading.pause_if_unreconciled(conn, run_id)
+        run = conn.execute("SELECT trading_enabled FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+        if run is None or not run["trading_enabled"]:
+            return
+        result = reconcile(conn, run_id)
+        if not result.ok:
+            reason = "Reconciliation failed: " + "; ".join(result.discrepancies)
+            trading.record_reconciliation_failure(conn, run_id, reason)
     if reason:
         raise trading.ReconciliationFailedError(reason)
 
 
-def _pause_after_failed_event(conn: sqlite3.Connection, run_id: str) -> None:
+def _pause_after_failed_event(conn: sqlite3.Connection, run_id: str, error: Exception) -> None:
+    """After a rolled-back mutation that failed reconciliation, pause a RUNNING run."""
     with transaction(conn):
-        trading.pause_if_unreconciled(conn, run_id)
-        run = conn.execute("SELECT status FROM runs WHERE run_id = ?", (run_id,)).fetchone()
-        if run["status"] == "RUNNING":  # books still fine: the event itself would have broken them
-            conn.execute("UPDATE runs SET status = 'PAUSED', status_reason = ? WHERE run_id = ?",
-                         ("Paused: an event would have left the books unreconciled and was rolled back.", run_id))
-            conn.execute("UPDATE replay_state SET status = 'PAUSED' WHERE run_id = ? AND status = 'ACTIVE'", (run_id,))
+        trading.record_reconciliation_failure(
+            conn, run_id, f"Paused: a change was rolled back because the books would not reconcile ({error}).")
+
+
+def _trading_command(conn: sqlite3.Connection, key: str, command_type: str, run_id: str,
+                     action: Callable[[], dict], payload: Optional[dict] = None) -> dict:
+    """Guarded trading command: reconcile before, and again inside the transaction before commit."""
+    _guard_trading_mutation(conn, run_id)
+
+    def checked() -> dict:
+        result = action()
+        trading.require_reconciled(conn, run_id)
+        return result
+
+    try:
+        return _command(conn, key, command_type, run_id, checked, payload)
+    except trading.ReconciliationFailedError as exc:
+        _pause_after_failed_event(conn, run_id, exc)
+        raise
 
 
 def step(conn: sqlite3.Connection, run_id: str, idempotency_key: str) -> dict:
-    _pre_step_reconcile(conn, run_id)
+    _guard_trading_mutation(conn, run_id)
     try:
         return _command(conn, idempotency_key, "REPLAY_STEP", run_id, lambda: _step_in_transaction(conn, run_id))
-    except trading.ReconciliationFailedError:
-        _pause_after_failed_event(conn, run_id)
+    except trading.ReconciliationFailedError as exc:
+        _pause_after_failed_event(conn, run_id, exc)
         raise
 
 
@@ -456,6 +481,7 @@ def pause(conn: sqlite3.Connection, run_id: str, idempotency_key: str) -> dict:
 
 
 def resume(conn: sqlite3.Connection, run_id: str, idempotency_key: str) -> dict:
+    _guard_trading_mutation(conn, run_id)
     return _command(conn, idempotency_key, "REPLAY_RESUME", run_id, lambda: _set_paused(conn, run_id, False))
 
 
@@ -468,6 +494,7 @@ def run_to_end(conn: sqlite3.Connection, run_id: str, idempotency_key: str) -> d
     """
     key = _check_key(idempotency_key)
     h = _payload_hash("REPLAY_RUN_TO_END", run_id, {})
+    _guard_trading_mutation(conn, run_id)
     with transaction(conn):
         prior = _prior_result(conn, key, h)
         if prior is not None:
@@ -481,7 +508,7 @@ def run_to_end(conn: sqlite3.Connection, run_id: str, idempotency_key: str) -> d
     steps = 0
     stopped = "EXHAUSTED"
     while True:
-        _pre_step_reconcile(conn, run_id)
+        _guard_trading_mutation(conn, run_id)
         try:
             with transaction(conn):
                 state, _ = stored_fixture(conn, run_id)
@@ -490,8 +517,8 @@ def run_to_end(conn: sqlite3.Connection, run_id: str, idempotency_key: str) -> d
                     break
                 _step_in_transaction(conn, run_id)
                 steps += 1
-        except trading.ReconciliationFailedError:
-            _pause_after_failed_event(conn, run_id)
+        except trading.ReconciliationFailedError as exc:
+            _pause_after_failed_event(conn, run_id, exc)
             raise
 
     with transaction(conn):
@@ -513,14 +540,14 @@ def run_to_end(conn: sqlite3.Connection, run_id: str, idempotency_key: str) -> d
 
 def start_trading(conn: sqlite3.Connection, run_id: str, idempotency_key: str) -> dict:
     """READY -> RUNNING for a trading run with a loaded fixture and reconciled books."""
-    return _command(conn, idempotency_key, "TRADING_START", run_id, lambda: trading.start(conn, run_id))
+    return _trading_command(conn, idempotency_key, "TRADING_START", run_id, lambda: trading.start(conn, run_id))
 
 
 def request_close(conn: sqlite3.Connection, run_id: str, idempotency_key: str) -> dict:
-    return _command(conn, idempotency_key, "TRADING_REQUEST_CLOSE", run_id,
-                    lambda: trading.request_close(conn, run_id))
+    return _trading_command(conn, idempotency_key, "TRADING_REQUEST_CLOSE", run_id,
+                            lambda: trading.request_close(conn, run_id))
 
 
 def cancel_order(conn: sqlite3.Connection, run_id: str, order_id: str, idempotency_key: str) -> dict:
-    return _command(conn, idempotency_key, "TRADING_CANCEL_ORDER", run_id,
-                    lambda: trading.cancel_order(conn, run_id, order_id), payload={"order_id": order_id})
+    return _trading_command(conn, idempotency_key, "TRADING_CANCEL_ORDER", run_id,
+                            lambda: trading.cancel_order(conn, run_id, order_id), payload={"order_id": order_id})

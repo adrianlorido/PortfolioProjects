@@ -182,7 +182,7 @@ is refused. Without `--key`, each invocation is a new command.
 python -m pytest            # macOS / Linux / PowerShell alike
 ```
 
-The suite has 277 tests and runs in about 15 seconds. It uses temporary
+The suite has 292 tests and runs in about 18 seconds. It uses temporary
 databases and never touches `data/`.
 
 | Area | File |
@@ -190,6 +190,7 @@ databases and never touches `data/`.
 | Strategy thresholds and boundaries (0.5% entry, 5% spread, 30–45 days in New York dates, strike/tie selection, freshness, cooldown, profit/loss/time exits, retry codes); risk_v1 reasons and inclusive limits | `tests/test_strategy.py` |
 | Worked example to the cent at every event; event order; buy/sell limits; no same-quote fills; invalid quotes; displayed size; reservations; marks don't bump revision; stale-revision and cash rechecks at acceptance; duplicate submit/fill; conflicting keys; cancel entry/exit; TTL boundaries and time jumps; exit retries across restart; cooldown; no re-entry; loss, time, and manual exits; session end INCOMPLETE; rollback mid-event; restart without double execution; reconciliation-failure pause; determinism; lifecycle guards | `tests/test_trading.py` |
 | Trading over HTTP, dashboard content, cancel/manual close, startup reconciliation pause | `tests/test_trading_api.py` |
+| Step 5 review: reconciliation blocks start, resume, step, replay-to-end, manual close, cancel, and order acceptance; reads stay available; untrusted display labeling and isolation; marks and STALE labels don't change the revision | `tests/test_step5_review.py` |
 | The CLI demo across real process and server restarts; Step 3 → current database upgrade | `tests/test_restart.py` |
 | Step 3 and Step 4 behavior (models, init, schema, API, fixtures, intake, replay, replay API) | `tests/test_models.py`, `test_init.py`, `test_schema.py`, `test_api.py`, `test_fixtures.py`, `test_intake.py`, `test_replay.py`, `test_replay_api.py` |
 
@@ -236,8 +237,18 @@ market value − cost basis, and excludes the prospective exit fee. A mark more
 than 2 simulated seconds old is kept and labeled `STALE`, never replaced with
 zero.
 
+**When the books don't reconcile**, every trading command on that run is
+refused: start, resume, step, replay-to-end, request-close, cancel, and order
+acceptance. A running run is paused with the reason. Reads keep working: the
+dashboard shows an **UNTRUSTED** banner and labels, disables its command
+buttons, and `/api/account` returns `"trusted": false`. Records that fail
+validation are shown as stored, flagged untrusted, and never used by the
+strategy, risk, broker, or accounting (SPEC.md §13 items 16–17).
+
 **Account revision.** It increments once per committed acceptance, fill,
-cancellation, or expiration. Risk approvals record the revision; acceptance
+cancellation, or expiration. Valuation-only changes (new bid marks,
+CURRENT→STALE labels) never change it. See `accounting/revision.py` for why
+that is valid for `risk_v1`. Risk approvals record the revision; acceptance
 rejects with `STALE_ACCOUNT_REVISION` if it changed and rechecks available
 cash or unreserved contracts atomically.
 

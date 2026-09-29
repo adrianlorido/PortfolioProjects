@@ -218,12 +218,21 @@ def _trading_command(fn, needs_order=False):
     return handler
 
 
+def _untrusted(record: dict) -> str:
+    return f"[UNTRUSTED: {record['validation_error']}] " if record.get("untrusted") else ""
+
+
 def _cmd_trades(settings, args) -> int:
     conn = _open_current(settings)
     try:
         run = queries.get_run(conn, settings.sample_run_key)
         print(f"run {run.run_id} key {run.init_key} [{run.status}] "
               f"{'trading' if run.trading_enabled else 'replay-only'}  clock {queries.latest_market_state(conn, run.run_id)['simulated_clock']}")
+        rec = reconcile(conn, run.run_id)
+        if not rec.ok:
+            print("WARNING: books do not reconcile; every figure below is DIAGNOSTIC and UNTRUSTED.")
+            for d in rec.discrepancies:
+                print(f"  - {d}")
         print("proposals -> risk -> orders:")
         for p in queries.list_proposals(conn, run.run_id):
             risk = p["decision"] + (f" {p['risk_reason_codes']}" if p["risk_reason_codes"] else "")
@@ -238,16 +247,16 @@ def _cmd_trades(settings, args) -> int:
                   f"cash {format_cents(f['net_cash_delta_cents'])} -> {format_cents(f['balance_after_cents'])} "
                   f"(quote seq {f['quote_source_sequence']})")
         print("positions:")
-        for p in queries.list_positions(conn, run.run_id):
-            print(f"  {p.status:<6} {p.contract_id} qty {p.quantity} reserved {p.reserved_contracts} "
-                  f"entry {format_cents(p.entry_price_cents)} basis {format_cents(p.remaining_cost_basis_cents)} "
-                  f"value {format_cents(p.market_value_cents)} unrealized {format_cents(p.unrealized_pnl_cents)} "
-                  f"[{p.valuation_status}]")
+        for p in queries.display_positions(conn, run.run_id):
+            print(f"  {_untrusted(p)}{p['status']:<6} {p['contract_id']} qty {p['quantity']} "
+                  f"reserved {p['reserved_contracts']} entry {format_cents(p['entry_price_cents'])} "
+                  f"basis {format_cents(p['remaining_cost_basis_cents'])} value {format_cents(p['market_value_cents'])} "
+                  f"unrealized {format_cents(p['unrealized_pnl_cents'])} [{p['valuation_status']}]")
         print("closed trades:")
-        for t in queries.list_closed_trades(conn, run.run_id):
-            print(f"  {t.opened_at} -> {t.closed_at} {t.exit_reason}: entry cost {format_cents(t.entry_cost_cents)} "
-                  f"exit net {format_cents(t.exit_net_proceeds_cents)} fees {format_cents(t.total_fees_cents)} "
-                  f"realized {format_cents(t.realized_pnl_cents)}")
+        for t in queries.display_closed_trades(conn, run.run_id):
+            print(f"  {_untrusted(t)}{t['opened_at']} -> {t['closed_at']} {t['exit_reason']}: "
+                  f"entry cost {format_cents(t['entry_cost_cents'])} exit net {format_cents(t['exit_net_proceeds_cents'])} "
+                  f"fees {format_cents(t['total_fees_cents'])} realized {format_cents(t['realized_pnl_cents'])}")
         print("ledger:")
         for e in queries.list_ledger(conn, run.run_id):
             print(f"  #{e['ledger_sequence']} {e['entry_type']:<15} premium {format_cents(e['premium_cash_delta_cents'])} "

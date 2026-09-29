@@ -137,6 +137,8 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             "snapshot": compute_snapshot(conn, acct.account_id).model_dump(),
             "unrealized_pnl_convention": "Marked at latest valid bid; excludes prospective exit fee.",
             "reconciliation": {"ok": rec.ok, "discrepancies": rec.discrepancies},
+            # A failed reconciliation means every figure here is diagnostic, not authoritative.
+            "trusted": rec.ok,
         }
 
     @app.get("/api/watchlist")
@@ -145,15 +147,15 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
 
     @app.get("/api/positions")
     def positions(run=Depends(current_run), conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
-        return [p.model_dump() for p in queries.list_positions(conn, run.run_id)]
+        return queries.display_positions(conn, run.run_id)
 
     @app.get("/api/orders")
     def orders(run=Depends(current_run), conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
-        return [o.model_dump() for o in queries.list_orders(conn, run.run_id)]
+        return queries.display_orders(conn, run.run_id)
 
     @app.get("/api/closed-trades")
     def closed_trades(run=Depends(current_run), conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
-        return [t.model_dump() for t in queries.list_closed_trades(conn, run.run_id)]
+        return queries.display_closed_trades(conn, run.run_id)
 
     # --- Step 4: sample-data replay -------------------------------------
 

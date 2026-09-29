@@ -35,15 +35,24 @@ def _record(model, row: sqlite3.Row, **overrides):
     return model(**data)
 
 
-def _stored_record(model, row: sqlite3.Row, **overrides):
-    """Read a stored record for display. If stored data no longer passes the model's
-    invariants (corrupted books), show it as stored instead of failing the page:
-    reconciliation reports the discrepancy and the run is paused."""
-    try:
-        return _record(model, row, **overrides)
-    except ValidationError:
-        data = {k: row[k] for k in model.model_fields if k in row.keys()}
-        return model.model_construct(**{**data, "schema_version": SCHEMA_VERSION, **overrides})
+def _display_records(model, rows: list[sqlite3.Row]) -> list[dict]:
+    """DIAGNOSTIC DISPLAY ONLY. Every stored row, as a dict, validated where possible.
+
+    A row that no longer passes the record's invariants (corrupted books) is still
+    shown, with its stored values, flagged ``untrusted: True`` and the validation
+    error, instead of failing the page. These dicts must never feed strategy,
+    risk, execution, or accounting: those modules read rows directly and validate
+    them strictly, so corrupted data raises there instead of being used.
+    """
+    out = []
+    for row in rows:
+        try:
+            out.append({**_record(model, row).model_dump(), "untrusted": False, "validation_error": None})
+        except ValidationError as exc:
+            data = {k: row[k] for k in model.model_fields if k in row.keys()}
+            errors = "; ".join(e["msg"] for e in exc.errors())
+            out.append({**data, "schema_version": SCHEMA_VERSION, "untrusted": True, "validation_error": errors})
+    return out
 
 
 def get_run(conn: sqlite3.Connection, init_key: str) -> Run:
@@ -71,25 +80,42 @@ def session_local_date(run: Run) -> str:
     return parse_utc(run.session_start).astimezone(ZoneInfo(run.session_timezone)).date().isoformat()
 
 
+def _rows(conn, table: str, run_id: str, order_by: str) -> list[sqlite3.Row]:
+    return conn.execute(f"SELECT * FROM {table} WHERE run_id = ? ORDER BY {order_by}", (run_id,)).fetchall()
+
+
+def display_positions(conn: sqlite3.Connection, run_id: str) -> list[dict]:
+    return _display_records(Position, _rows(conn, "positions", run_id, "opened_at, position_id"))
+
+
+def display_orders(conn: sqlite3.Connection, run_id: str) -> list[dict]:
+    return _display_records(Order, _rows(conn, "orders", run_id, "submitted_at, order_id"))
+
+
+def display_closed_trades(conn: sqlite3.Connection, run_id: str) -> list[dict]:
+    return _display_records(ClosedTrade, _rows(conn, "closed_trades", run_id, "closed_at, closed_trade_id"))
+
+
 def list_positions(conn: sqlite3.Connection, run_id: str) -> list[Position]:
+    """Strict: raises if a stored position fails validation. Use display_positions for pages."""
     rows = conn.execute(
         "SELECT * FROM positions WHERE run_id = ? ORDER BY opened_at, position_id", (run_id,)
     ).fetchall()
-    return [_stored_record(Position, r) for r in rows]
+    return [_record(Position, r) for r in rows]
 
 
 def list_orders(conn: sqlite3.Connection, run_id: str) -> list[Order]:
     rows = conn.execute(
         "SELECT * FROM orders WHERE run_id = ? ORDER BY submitted_at, order_id", (run_id,)
     ).fetchall()
-    return [_stored_record(Order, r) for r in rows]
+    return [_record(Order, r) for r in rows]
 
 
 def list_closed_trades(conn: sqlite3.Connection, run_id: str) -> list[ClosedTrade]:
     rows = conn.execute(
         "SELECT * FROM closed_trades WHERE run_id = ? ORDER BY closed_at, closed_trade_id", (run_id,)
     ).fetchall()
-    return [_stored_record(ClosedTrade, r) for r in rows]
+    return [_record(ClosedTrade, r) for r in rows]
 
 
 def list_run_events(conn: sqlite3.Connection, run_id: str) -> list[dict]:
@@ -112,9 +138,9 @@ class Dashboard:
     account: Account
     snapshot: AccountSnapshot
     session_local_date: str
-    positions: list[Position]
-    orders: list[Order]
-    closed_trades: list[ClosedTrade]
+    positions: list[dict]          # display records (see _display_records): may be flagged untrusted
+    orders: list[dict]
+    closed_trades: list[dict]
     reconciliation: ReconciliationResult
     replay: Optional[dict] = None
     replay_events: list[dict] = field(default_factory=list)
@@ -135,9 +161,9 @@ def get_dashboard(conn: sqlite3.Connection, init_key: str) -> Dashboard:
         account=account,
         snapshot=compute_snapshot(conn, account.account_id),
         session_local_date=session_local_date(run),
-        positions=list_positions(conn, run.run_id),
-        orders=list_orders(conn, run.run_id),
-        closed_trades=list_closed_trades(conn, run.run_id),
+        positions=display_positions(conn, run.run_id),
+        orders=display_orders(conn, run.run_id),
+        closed_trades=display_closed_trades(conn, run.run_id),
         reconciliation=reconcile(conn, run.run_id),
         replay=get_replay_state(conn, run.run_id),
         replay_events=list_replay_events(conn, run.run_id),

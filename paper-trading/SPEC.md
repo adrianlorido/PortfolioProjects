@@ -711,3 +711,34 @@ silent or ambiguous; items 1–4 are flagged for review.
 15. **Display of corrupted records.** If stored rows no longer satisfy the
     record invariants, the dashboard still renders them as stored, with
     reconciliation marked `FAILED`, instead of failing the page.
+16. **Reconciliation blocks every trading mutation (Step 5 review).** On a
+    trading run, step, replay-to-end (before every event), start, resume,
+    request-close, and cancel all reconcile first. Order acceptance
+    reconciles again inside the event's transaction before the broker sees
+    the order, and start, request-close, and cancel reconcile again before
+    commit.
+    - On failure, nothing is changed and the command is refused
+      (`RECONCILIATION_FAILED`, HTTP 409).
+    - A `RUNNING` run is paused with the reason and one
+      `RECONCILIATION_FAILED` event. Refusals on an already-paused or `READY`
+      run write nothing.
+    - This also applies to idempotent retries of completed commands.
+    - Pause remains allowed, and all reads and diagnostics remain available.
+      `/api/account` reports `"trusted": false`.
+    - Replay-only runs have no trading books and are not guarded.
+17. **Untrusted display fallback.** Authoritative reads (`queries.list_*`,
+    the strategy, risk, broker, and accounting modules) validate stored
+    records strictly and raise on invalid data. Only display reads
+    (`queries.display_*`, used by the dashboard, the positions/orders/
+    closed-trades endpoints, and `trades`) show invalid rows. Each such row
+    is flagged `untrusted: true` with its validation error. When
+    reconciliation fails, the dashboard shows an UNTRUSTED banner and
+    labels, and disables commands. A test enforces that trading code never
+    imports the display reads.
+18. **Valuation and account revision.** `mark_positions` and
+    `refresh_staleness` never increment the revision. This is valid for
+    `risk_v1` because acceptance rechecks only available cash (cash −
+    reserved) and unreserved contracts, neither of which depends on marks,
+    equity, or valuation status. The proposal's quote is pinned by id, and
+    approval and acceptance share one transaction. A future policy that uses
+    equity or marks must revisit this rule (see `accounting/revision.py`).

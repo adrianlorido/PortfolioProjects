@@ -212,6 +212,7 @@ def _propose_and_route(conn, run, draft: strategy.ProposalDraft, clock: str) -> 
     decision = evaluate_risk(conn, run, proposal, clock)
     result = {"proposal_id": proposal["proposal_id"], "decision": decision["decision"], "order": None}
     if decision["decision"] == "APPROVED":
+        require_reconciled(conn, run["run_id"])  # no order acceptance on books that do not reconcile
         generating = conn.execute("SELECT source_sequence FROM market_quotes WHERE quote_id = ?",
                                   (proposal["quote_id"],)).fetchone()[0]
         submitted = broker.submit(conn, run, proposal, decision, clock, generating)
@@ -335,19 +336,32 @@ def require_trading_run(run: sqlite3.Row) -> None:
         raise NotTradingRunError("this is a replay-only run; create a trading run (init-sample --trading)")
 
 
-def pause_if_unreconciled(conn, run_id: str) -> Optional[str]:
-    """Reconcile. On failure pause the run and record why; return the reason (caller commits, then raises)."""
+def require_reconciled(conn, run_id: str) -> None:
+    """Read-only check inside the caller's transaction: raise if the books do not reconcile.
+
+    Called before every order acceptance and before starting a run, so no trading
+    mutation proceeds on books that do not reconcile, even mid-event.
+    """
     result = reconcile(conn, run_id)
-    if result.ok:
-        return None
+    if not result.ok:
+        raise ReconciliationFailedError("Reconciliation failed: " + "; ".join(result.discrepancies))
+
+
+def record_reconciliation_failure(conn, run_id: str, reason: str) -> bool:
+    """Pause a RUNNING trading run and record why (caller commits).
+
+    Runs in any other status are left untouched, so refused commands on an
+    already-paused run write nothing. Returns True if the run was paused.
+    """
     run = _run(conn, run_id)
-    reason = "Reconciliation failed: " + "; ".join(result.discrepancies)
-    if run["status"] == "RUNNING":
-        conn.execute("UPDATE runs SET status = 'PAUSED', status_reason = ? WHERE run_id = ?", (reason, run_id))
-        conn.execute("UPDATE replay_state SET status = 'PAUSED' WHERE run_id = ? AND status = 'ACTIVE'", (run_id,))
+    if run is None or not run["trading_enabled"] or run["status"] != "RUNNING":
+        return False
+    conn.execute("UPDATE runs SET status = 'PAUSED', status_reason = ? WHERE run_id = ?", (reason, run_id))
+    conn.execute("UPDATE replay_state SET status = 'PAUSED' WHERE run_id = ? AND status = 'ACTIVE'", (run_id,))
+    discrepancies = reconcile(conn, run_id).discrepancies
     append_run_event(conn, run_id, "RECONCILIATION_FAILED", run["simulated_clock"],
-                     {"discrepancies": result.discrepancies})
-    return reason
+                     {"reason": reason, "discrepancies": discrepancies})
+    return True
 
 
 def start(conn, run_id: str) -> dict:
@@ -358,9 +372,7 @@ def start(conn, run_id: str) -> dict:
     state = conn.execute("SELECT * FROM replay_state WHERE run_id = ?", (run_id,)).fetchone()
     if state is None:
         raise RunStateError("load a fixture before starting the run")
-    result = reconcile(conn, run_id)
-    if not result.ok:
-        raise ReconciliationFailedError("; ".join(result.discrepancies))
+    require_reconciled(conn, run_id)
     conn.execute("UPDATE runs SET status = 'RUNNING', status_reason = NULL WHERE run_id = ?", (run_id,))
     append_run_event(conn, run_id, "RUN_STARTED", run["simulated_clock"], {"fixture_id": run["fixture_id"]})
     return {"run_status": "RUNNING"}
@@ -386,8 +398,19 @@ def request_close(conn, run_id: str) -> dict:
                          {"position_id": pos["position_id"], "reason_code": "MANUAL_CLOSE", "requested_by": "USER"})
     routed = _evaluate_exit(conn, run_id, clock) if run["status"] == "RUNNING" else None
     reason = intent["reason_code"] if intent else "MANUAL_CLOSE"
+    pending = conn.execute(
+        """SELECT COUNT(*) FROM orders WHERE position_id = ? AND intent = 'SELL_TO_CLOSE'
+            AND status IN ('PENDING','OPEN')""", (pos["position_id"],)).fetchone()[0]
+    if routed:
+        note = None
+    elif pending:
+        note = "A closing order is already open; no duplicate closing proposal was made."
+    elif run["status"] == "PAUSED":
+        note = "Run is paused; the closing proposal will be made on the next valid quote after resume."
+    else:
+        note = "Closing proposal will be made on the next valid quote."
     return {"position_id": pos["position_id"], "intent_created": created, "exit_intent": reason,
-            "proposal": routed, "note": None if routed else "Closing proposal will be made on the next valid quote."}
+            "proposal": routed, "note": note}
 
 
 def cancel_order(conn, run_id: str, order_id: str) -> dict:
@@ -406,6 +429,8 @@ def reconcile_running_runs(conn) -> list[str]:
     paused = []
     for r in conn.execute("SELECT run_id FROM runs WHERE trading_enabled = 1 AND status = 'RUNNING'").fetchall():
         with transaction(conn):
-            if pause_if_unreconciled(conn, r["run_id"]):
+            result = reconcile(conn, r["run_id"])
+            if not result.ok and record_reconciliation_failure(
+                    conn, r["run_id"], "Reconciliation failed at startup: " + "; ".join(result.discrepancies)):
                 paused.append(r["run_id"])
     return paused
