@@ -278,14 +278,14 @@ def freshness(observed_at: str, simulated_clock: str) -> dict:
 
 
 def latest_market_state(conn: sqlite3.Connection, run_id: str) -> dict:
-    """Latest ACCEPTED quote per contract. Rejected inputs are never consulted."""
+    """Latest ACCEPTED quote per contract, most recent first. Rejected inputs are never consulted."""
     clock = conn.execute("SELECT simulated_clock FROM runs WHERE run_id = ?", (run_id,)).fetchone()[0]
     rows = conn.execute(
         """SELECT q.* FROM market_quotes q
             WHERE q.run_id = ? AND q.event_sequence = (
                   SELECT MAX(event_sequence) FROM market_quotes
                    WHERE run_id = q.run_id AND contract_id = q.contract_id)
-            ORDER BY q.contract_id""",
+            ORDER BY q.event_sequence DESC""",
         (run_id,),
     ).fetchall()
     latest = []

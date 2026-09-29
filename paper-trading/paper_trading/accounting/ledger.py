@@ -203,6 +203,7 @@ def _trading_discrepancies(conn: sqlite3.Connection, run: sqlite3.Row, account_i
             if p["valuation_status"] != "UNAVAILABLE" and p["market_value_cents"] is not None and \
                     p["unrealized_pnl_cents"] != p["market_value_cents"] - p["remaining_cost_basis_cents"]:
                 problems.append(f"position {p['position_id']} unrealized P&L does not equal value - basis")
+            problems.extend(_mark_discrepancies(conn, run_id, p))
         elif conn.execute("SELECT COUNT(*) FROM closed_trades WHERE position_id = ?",
                           (p["position_id"],)).fetchone()[0] != 1:
             problems.append(f"closed position {p['position_id']} has no closed-trade record")
@@ -217,4 +218,34 @@ def _trading_discrepancies(conn: sqlite3.Connection, run: sqlite3.Row, account_i
         if (t["entry_cost_cents"] != t["eg"] + t["efee"] or t["exit_net_proceeds_cents"] != t["xg"] - t["xfee"]
                 or t["total_fees_cents"] != t["efee"] + t["xfee"]):
             problems.append(f"closed trade {t['closed_trade_id']} does not match its fills")
+    return problems
+
+
+def _mark_discrepancies(conn: sqlite3.Connection, run_id: str, p: sqlite3.Row) -> list[str]:
+    """An open position's valuation must be derivable from its mark (Step 6 finding F1).
+
+    The equity identity (cash + value = start + realized + unrealized) cannot detect a
+    wrong market value, so check it against the marked quote: value = mark bid x
+    multiplier x quantity, and the mark is the contract's latest accepted quote.
+    """
+    if p["market_value_cents"] is None or p["mark_quote_id"] is None:
+        return []
+    mark = conn.execute(
+        """SELECT q.*, c.multiplier FROM market_quotes q JOIN option_contracts c USING (contract_id)
+            WHERE q.quote_id = ?""", (p["mark_quote_id"],)
+    ).fetchone()
+    pid = p["position_id"]
+    if mark is None or mark["run_id"] != run_id or mark["contract_id"] != p["contract_id"]:
+        return [f"position {pid} is marked with a quote from another run or contract"]
+    problems = []
+    expected = mark["bid_cents"] * mark["multiplier"] * p["quantity"]
+    if p["market_value_cents"] != expected:
+        problems.append(f"position {pid} market value {p['market_value_cents']} != mark bid x multiplier x qty "
+                        f"({expected})")
+    latest = conn.execute(
+        "SELECT MAX(event_sequence) FROM market_quotes WHERE run_id = ? AND contract_id = ?",
+        (run_id, p["contract_id"]),
+    ).fetchone()[0]
+    if mark["event_sequence"] != latest:
+        problems.append(f"position {pid} is not marked at the latest accepted quote for its contract")
     return problems

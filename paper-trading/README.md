@@ -182,7 +182,7 @@ is refused. Without `--key`, each invocation is a new command.
 python -m pytest            # macOS / Linux / PowerShell alike
 ```
 
-The suite has 292 tests and runs in about 18 seconds. It uses temporary
+The suite has 321 tests and runs in about 20 seconds. It uses temporary
 databases and never touches `data/`.
 
 | Area | File |
@@ -191,6 +191,7 @@ databases and never touches `data/`.
 | Worked example to the cent at every event; event order; buy/sell limits; no same-quote fills; invalid quotes; displayed size; reservations; marks don't bump revision; stale-revision and cash rechecks at acceptance; duplicate submit/fill; conflicting keys; cancel entry/exit; TTL boundaries and time jumps; exit retries across restart; cooldown; no re-entry; loss, time, and manual exits; session end INCOMPLETE; rollback mid-event; restart without double execution; reconciliation-failure pause; determinism; lifecycle guards | `tests/test_trading.py` |
 | Trading over HTTP, dashboard content, cancel/manual close, startup reconciliation pause | `tests/test_trading_api.py` |
 | Step 5 review: reconciliation blocks start, resume, step, replay-to-end, manual close, cancel, and order acceptance; reads stay available; untrusted display labeling and isolation; marks and STALE labels don't change the revision | `tests/test_step5_review.py` |
+| Step 6 stress and end-to-end verification (price gaps, expiries and releases, freshness boundaries, concurrent commands on separate connections, restart in each open state, failures before and after commit, session end with an open closing order, multi-contract selection, determinism), with an independent books check after every event. See [`STEP6_VALIDATION.md`](STEP6_VALIDATION.md). | `tests/test_step6_stress.py` |
 | The CLI demo across real process and server restarts; Step 3 → current database upgrade | `tests/test_restart.py` |
 | Step 3 and Step 4 behavior (models, init, schema, API, fixtures, intake, replay, replay API) | `tests/test_models.py`, `test_init.py`, `test_schema.py`, `test_api.py`, `test_fixtures.py`, `test_intake.py`, `test_replay.py`, `test_replay_api.py` |
 

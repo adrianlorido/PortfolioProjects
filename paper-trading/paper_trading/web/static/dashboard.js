@@ -38,12 +38,18 @@
     return "ui-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
   }
 
+  // A 5xx may mean the command committed but the response was lost, so it is
+  // retried with the same key like a network failure: the server then returns
+  // the stored result instead of running the command again.
   function post(url, body, attemptsLeft) {
     return fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify(body),
-    }).catch(function (err) {
+    }).then(function (r) {
+      if (r.status >= 500 && attemptsLeft > 0) return post(url, body, attemptsLeft - 1);
+      return r;
+    }, function (err) {
       if (attemptsLeft > 0) return post(url, body, attemptsLeft - 1);
       throw err;
     });
@@ -70,7 +76,7 @@
       if (msg) { msg.className = "command-msg muted small"; msg.textContent = "Sending " + command + "…"; }
       post("/api/" + ENDPOINTS[command] + "?run=" + encodeURIComponent(runKey), body, 2)
         .then(function (r) {
-          return r.json().then(function (data) {
+          return r.json().catch(function () { return { error: "HTTP " + r.status }; }).then(function (data) {
             if (!r.ok) {
               var detail = data && (data.detail || data.error);
               throw new Error(typeof detail === "string" ? detail : (JSON.stringify(detail) || "HTTP " + r.status));

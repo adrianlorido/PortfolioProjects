@@ -121,3 +121,93 @@ class TradingRun:
 
     def count(self, table: str) -> int:
         return self.conn.execute(f"SELECT COUNT(*) FROM {table} WHERE run_id = ?", (self.run_id,)).fetchone()[0]
+
+
+def assert_books(conn, run_id: str, account_id: str) -> None:
+    """Independent accounting check from raw tables (does not call reconcile, which is under test).
+
+    Verifies: cash = sum of ledger deltas; available = cash - reservations; cash and contract
+    reservations match OPEN orders exactly; position quantity and cost basis match fills; fees and
+    realized P&L match fills; equity = starting cash + realized + unrealized when valuation exists.
+    """
+    one = lambda sql, *a: conn.execute(sql, a).fetchone()[0]  # noqa: E731
+    run = conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+    fee_rate, start = run["fee_per_contract_cents"], run["starting_cash_cents"]
+    snap = compute_snapshot(conn, account_id)
+
+    ledger_sum = one("SELECT COALESCE(SUM(net_cash_delta_cents),0) FROM cash_ledger_entries WHERE account_id = ?",
+                     account_id)
+    assert snap.cash_cents == ledger_sum
+    fills = conn.execute(
+        """SELECT f.*, o.intent, o.position_id AS order_position FROM fills f JOIN orders o USING (order_id)
+            WHERE f.run_id = ?""", (run_id,)).fetchall()
+    signed = sum((-1 if f["intent"] == "BUY_TO_OPEN" else 1) * f["gross_cents"] - f["fee_cents"] for f in fills)
+    assert ledger_sum == start + signed, "cash must equal starting cash plus fill cash flows"
+    assert snap.fees_paid_cents == sum(f["fee_cents"] for f in fills)
+    assert all(f["fee_cents"] == fee_rate * f["quantity"] for f in fills)
+    assert all(f["gross_cents"] == f["price_cents"] * 100 * f["quantity"] for f in fills)
+
+    open_orders = conn.execute("SELECT * FROM orders WHERE run_id = ? AND status IN ('PENDING','OPEN')",
+                               (run_id,)).fetchall()
+    expected_cash_res = sum(o["limit_cents"] * 100 * o["quantity"] + fee_rate * o["quantity"]
+                            for o in open_orders if o["intent"] == "BUY_TO_OPEN")
+    assert all(o["reserved_cash_cents"] == (o["limit_cents"] * 100 * o["quantity"] + fee_rate * o["quantity"]
+                                            if o["intent"] == "BUY_TO_OPEN" else 0) for o in open_orders)
+    assert all(o["reserved_contracts"] == (o["quantity"] if o["intent"] == "SELL_TO_CLOSE" else 0)
+               for o in open_orders)
+    assert one("SELECT COUNT(*) FROM orders WHERE run_id = ? AND status NOT IN ('PENDING','OPEN') "
+               "AND (reserved_cash_cents <> 0 OR reserved_contracts <> 0)", run_id) == 0
+    assert snap.reserved_cash_cents == expected_cash_res
+    assert snap.available_cash_cents == snap.cash_cents - expected_cash_res
+    assert snap.available_cash_cents >= 0, "overspent"
+
+    unrealized = 0
+    valued = True
+    for p in conn.execute("SELECT * FROM positions WHERE run_id = ?", (run_id,)).fetchall():
+        bought = sum(f["quantity"] for f in fills if f["fill_id"] == p["entry_fill_id"])
+        sold = sum(f["quantity"] for f in fills if f["intent"] == "SELL_TO_CLOSE" and f["order_position"] == p["position_id"])
+        assert p["quantity"] == bought - sold >= 0, "position quantity must match fills (no overselling)"
+        sell_reserved = sum(o["reserved_contracts"] for o in open_orders if o["position_id"] == p["position_id"])
+        assert p["reserved_contracts"] == sell_reserved <= p["quantity"]
+        entry = next(f for f in fills if f["fill_id"] == p["entry_fill_id"])
+        if p["status"] == "OPEN":
+            assert p["remaining_cost_basis_cents"] == entry["gross_cents"] + entry["fee_cents"]
+            if p["market_value_cents"] is None:
+                valued = False
+            else:
+                mark = conn.execute("SELECT bid_cents FROM market_quotes WHERE quote_id = ?",
+                                    (p["mark_quote_id"],)).fetchone()[0]
+                assert p["market_value_cents"] == mark * 100 * p["quantity"], "mark must be latest bid x 100 x qty"
+                assert p["unrealized_pnl_cents"] == p["market_value_cents"] - p["remaining_cost_basis_cents"]
+                unrealized += p["unrealized_pnl_cents"]
+
+    realized = 0
+    for t in conn.execute("SELECT * FROM closed_trades WHERE run_id = ?", (run_id,)).fetchall():
+        ef = next(f for f in fills if f["fill_id"] == t["entry_fill_id"])
+        xf = next(f for f in fills if f["fill_id"] == t["exit_fill_id"])
+        assert t["entry_cost_cents"] == ef["gross_cents"] + ef["fee_cents"]
+        assert t["exit_net_proceeds_cents"] == xf["gross_cents"] - xf["fee_cents"]
+        assert t["total_fees_cents"] == ef["fee_cents"] + xf["fee_cents"]
+        assert t["realized_pnl_cents"] == t["exit_net_proceeds_cents"] - t["entry_cost_cents"]
+        realized += t["realized_pnl_cents"]
+    assert snap.realized_pnl_cents == realized
+    if valued:
+        assert snap.unrealized_pnl_cents == unrealized
+        assert snap.equity_cents == start + realized + unrealized == snap.cash_cents + snap.market_value_cents
+
+
+class CheckedRun(TradingRun):
+    """TradingRun that also runs the independent books check after every event."""
+
+    def step(self, n: int = 1, check: bool = True) -> list[dict]:
+        out = []
+        for _ in range(n):
+            out.extend(super().step(1, check))
+            assert_books(self.conn, self.run_id, self.account_id)
+        return out
+
+    def run_to_end(self) -> dict:
+        result = None
+        while queries.get_replay_state(self.conn, self.run_id)["status"] == "ACTIVE":
+            result = self.step()[0]
+        return result

@@ -742,3 +742,13 @@ silent or ambiguous; items 1–4 are flagged for review.
     equity, or valuation status. The proposal's quote is pinned by id, and
     approval and acceptance share one transaction. A future policy that uses
     equity or marks must revisit this rule (see `accounting/revision.py`).
+19. **Step 6 verification findings** (details in `STEP6_VALIDATION.md`). No
+    trading or accounting rule changed.
+    - F1: reconciliation now also requires an open position's market value to
+      equal its mark bid × multiplier × quantity, with the mark being the
+      contract's latest accepted quote. The equity identity alone could not
+      detect a wrong valuation.
+    - F2: the dashboard retries a command with the same idempotency key after
+      a 5xx response, as it already did after a network error, so a response
+      lost after commit is not repeated as a new command.
+    - F3: the latest-quote display lists contracts most recent first.
