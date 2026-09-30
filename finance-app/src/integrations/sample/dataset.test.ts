@@ -45,13 +45,27 @@ describe("sample dataset", () => {
 
   it("credit card payments exactly pay off the previous month's charges", () => {
     const visa = dataset.accounts.find((a) => a.type === "credit")!;
-    const payments = dataset.transactions.filter((t) => t.externalAccountId === visa.externalAccountId && t.originalDescription === "ONLINE PAYMENT - THANK YOU");
+    const opening = dataset.balances.find((b) => b.externalAccountId === visa.externalAccountId)!.balance;
+    const cardTxs = dataset.transactions.filter((t) => t.externalAccountId === visa.externalAccountId && !t.pending);
+    const payments = cardTxs.filter((t) => t.categoryHint === "credit_card_payment");
     expect(payments).toHaveLength(6);
-    // Each card-side payment has a matching checking-side outflow on the same day.
     for (const p of payments) {
-      const other = dataset.transactions.find((t) => t.date === p.date && t.originalDescription === "SUMMIT CARD ONLINE PMT");
+      // Each card-side payment has a matching checking-side outflow on the same day…
+      const other = dataset.transactions.find((t) => t.date === p.date && t.categoryHint === "credit_card_payment" && t.externalAccountId !== visa.externalAccountId);
       expect(other?.amount).toBe(money(-p.amount));
+      // …and equals the previous month's net card charges (the opening balance for April).
+      const month = p.date.slice(0, 7);
+      const prevMonth = month === "2026-04" ? null : `2026-${String(Number(month.slice(5)) - 1).padStart(2, "0")}`;
+      const owed = prevMonth
+        ? -sum(cardTxs.filter((t) => t.date.startsWith(prevMonth) && t.categoryHint !== "credit_card_payment").map((t) => t.amount))
+        : -opening;
+      expect(p.amount).toBe(owed);
     }
+  });
+
+  it("payments, transfers, income and interest carry provider category hints (classification doesn't depend on text)", () => {
+    const hinted = new Set(dataset.transactions.map((t) => t.categoryHint).filter(Boolean));
+    expect([...hinted].sort()).toEqual(["credit_card_payment", "interest_fees", "interest_income", "investment_contribution", "loan_payment", "paycheck", "transfer"]);
   });
 
   it("every transfer leg has an opposite leg of the same size on the same day", () => {

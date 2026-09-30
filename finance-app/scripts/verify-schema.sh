@@ -13,4 +13,7 @@ for migration in supabase/migrations/*.sql; do
   echo "Applying $migration"
   "${PSQL[@]}" -d "$DB" -f "$migration"
 done
-"${PSQL[@]}" -d "$DB" -f supabase/tests/10_schema_assertions.sql
+for suite in supabase/tests/[1-9]*.sql; do
+  echo "Running $suite"
+  "${PSQL[@]}" -d "$DB" -f "$suite"
+done

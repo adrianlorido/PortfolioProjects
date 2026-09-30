@@ -3,23 +3,15 @@ import type { RuleMatchType } from "@/domain/models";
 /**
  * Starter categorization rules for the sample user: (description pattern -> category slug).
  * They are seeded as ordinary CategoryRule rows and run through the same rule engine that
- * user-defined rules will use.
+ * user-defined rules will use. They cover MERCHANT spending only: income, transfers, card and
+ * loan payments and interest are classified by the provider's category hint (see dataset.ts),
+ * so treating a card payment as a transfer does not depend on matching description text.
  */
 export const SAMPLE_RULES: readonly { pattern: string; categorySlug: string; matchType?: RuleMatchType }[] = [
-  { pattern: "ACME CORP PAYROLL", categorySlug: "paycheck" },
   { pattern: "ACME CORP EXPENSE REIMB", categorySlug: "other_income" },
-  { pattern: "INTEREST PAID", categorySlug: "interest_income" },
   { pattern: "OAKWOOD PROPERTIES", categorySlug: "rent" },
   { pattern: "GEICO", categorySlug: "insurance" },
   { pattern: "PGANDE", categorySlug: "utilities" },
-  { pattern: "ONLINE TRANSFER", categorySlug: "transfer" },
-  { pattern: "HARBOR BROKERAGE ACH", categorySlug: "investment_contribution" },
-  { pattern: "ACH CONTRIBUTION RECEIVED", categorySlug: "investment_contribution" },
-  { pattern: "INTEREST CHARGE", categorySlug: "interest_fees" },
-  { pattern: "NORTHWIND AUTO FIN PMT", categorySlug: "loan_payment" },
-  { pattern: "AUTO LOAN PAYMENT RECEIVED", categorySlug: "loan_payment" },
-  { pattern: "SUMMIT CARD ONLINE PMT", categorySlug: "credit_card_payment" },
-  { pattern: "ONLINE PAYMENT - THANK YOU", categorySlug: "credit_card_payment" },
   { pattern: "TRADER JOE", categorySlug: "groceries" },
   { pattern: "WHOLEFDS", categorySlug: "groceries" },
   { pattern: "SAFEWAY", categorySlug: "groceries" },

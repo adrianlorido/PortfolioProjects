@@ -16,6 +16,7 @@ import type {
   IsoDate,
   Provider,
   Transaction,
+  TransactionSplit,
   TransactionUserEdits,
   User,
 } from "@/domain/models";
@@ -53,6 +54,11 @@ export interface FinanceWriteRepository {
     edits: TransactionUserEdits,
     now: string,
   ): Promise<Transaction>;
+  /**
+   * Replaces the transaction's splits (empty array = unsplit). Lines must satisfy
+   * validateSplits() and reference the user's own categories. Never changes the amount.
+   */
+  setTransactionSplits(userId: Id, transactionId: Id, splits: TransactionSplit[], now: string): Promise<Transaction>;
 }
 
 /** Write path used only by the sync/ingestion pipeline (server-side, trusted). */

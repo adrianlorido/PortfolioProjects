@@ -130,9 +130,25 @@ export interface CategoryRule {
   isActive: boolean;
 }
 
-export const CATEGORY_SOURCES = ["none", "rule", "user"] as const;
-/** Where the current category came from. "user" is never overwritten by imports or rules. */
+export const CATEGORY_SOURCES = ["none", "provider", "rule", "user"] as const;
+/**
+ * Where the current category came from. Assigned once, at first import:
+ * a matching user rule wins, else the provider's category hint, else none.
+ * "user" (set by hand) is never overwritten by imports, rules or re-syncs.
+ */
 export type CategorySource = (typeof CATEGORY_SOURCES)[number];
+
+/**
+ * One line of a split transaction. Splits let one bank transaction be reported under several
+ * categories, e.g. a $500 loan payment = $420 principal (Loan Payment, transfer) + $80
+ * interest (Interest & Fees, expense). Split amounts use the same sign convention and must
+ * sum exactly to the parent amount (see modules/finance/splits.ts).
+ * Splits are user-owned classification: they never change the transaction amount.
+ */
+export interface TransactionSplit {
+  amount: Money;
+  categoryId: Id | null;
+}
 
 export interface Transaction {
   id: Id;
@@ -149,15 +165,34 @@ export interface Transaction {
   amount: Money;
   currency: CurrencyCode;
   pending: boolean;
+  /** Ignored by reports when `splits` is non-empty (each split carries its own category). */
   categoryId: Id | null;
   categorySource: CategorySource;
+  /** Empty = not split. Otherwise >= 2 lines summing exactly to `amount`. */
+  splits: TransactionSplit[];
   notes: string | null;
   excludedFromReports: boolean;
   createdAt: IsoDateTime;
   updatedAt: IsoDateTime;
 }
 
-/** The only transaction fields a user may edit. Everything else is provider-owned. */
+/**
+ * Field ownership — the contract between sync and user edits. Every Transaction field is in
+ * exactly one list (enforced by a test).
+ *   provider: refreshed from the provider on every sync; never editable by the user.
+ *   user:     classification and annotations; set by the user (or by rules/hints at first
+ *             import) and NEVER overwritten by a re-sync.
+ *   system:   identity and bookkeeping; immutable after insert except the timestamps.
+ */
+export const TRANSACTION_FIELD_OWNERSHIP = {
+  provider: ["date", "merchantName", "originalDescription", "amount", "currency", "pending"],
+  user: ["categoryId", "categorySource", "splits", "notes", "excludedFromReports"],
+  system: ["id", "userId", "accountId", "externalTransactionId", "createdAt", "updatedAt"],
+} as const satisfies Record<"provider" | "user" | "system", readonly (keyof Transaction)[]>;
+
+export type ProviderOwnedTransactionField = (typeof TRANSACTION_FIELD_OWNERSHIP.provider)[number];
+
+/** The only transaction fields a user may edit directly. Everything else is provider- or system-owned. */
 export interface TransactionUserEdits {
   categoryId?: Id | null;
   notes?: string | null;

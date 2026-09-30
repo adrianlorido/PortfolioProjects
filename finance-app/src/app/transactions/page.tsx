@@ -125,6 +125,7 @@ export default async function TransactionsPage({ searchParams }: { searchParams:
           accountName: t.accountName,
           categoryId: t.categoryId,
           categoryName: t.categoryName,
+          splitCount: t.splits.length,
           amount: t.amount,
           pending: t.pending,
           notes: t.notes,

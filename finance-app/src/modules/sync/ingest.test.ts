@@ -24,7 +24,7 @@ describe("syncConnection idempotency", () => {
     const deps = { repo, provider: new SampleFinancialDataProvider(), now };
     for (const connection of await repo.listConnections(userId)) {
       const result = await syncConnection(deps, userId, connection.id);
-      expect(result.transactions).toEqual({ inserted: 0, updated: 0, unchanged: 0, removed: 0 });
+      expect(result.transactions).toEqual({ inserted: 0, updated: 0, unchanged: 0, removed: 0, replacedPending: 0, splitsCleared: 0 });
     }
     expect(await snapshotState(repo)).toEqual(before);
   });

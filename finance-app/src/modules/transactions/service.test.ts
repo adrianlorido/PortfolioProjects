@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SAMPLE_USER, createSampleRepository } from "@/db/sample-bootstrap";
 import { NotFoundError, ValidationError } from "@/lib/errors";
 import { parseTransactionFilters } from "./schemas";
-import { updateTransactionFromInput } from "./service";
+import { setTransactionSplitsFromInput, updateTransactionFromInput } from "./service";
 
 const now = "2026-09-29T00:00:00.000Z";
 
@@ -69,5 +69,38 @@ describe("parseTransactionFilters", () => {
     });
     expect(parseTransactionFilters({ account: "'; drop table--" }).accountId).toBeUndefined();
     expect(parseTransactionFilters({})).toEqual({ accountId: undefined, categoryId: undefined, search: undefined, startDate: undefined, endDate: undefined });
+  });
+});
+
+describe("setTransactionSplitsFromInput", () => {
+  async function loanPayment() {
+    const repo = await createSampleRepository();
+    const [tx] = await repo.listTransactions(SAMPLE_USER.id, { search: "NORTHWIND AUTO FIN PMT" });
+    return { repo, tx: tx! }; // -$389.00 from checking
+  }
+
+  it("splits a payment into principal and interest without changing the amount", async () => {
+    const { repo, tx } = await loanPayment();
+    const updated = await setTransactionSplitsFromInput(repo, SAMPLE_USER.id, {
+      transactionId: tx.id,
+      splits: [{ amount: -30_647, categoryId: "cat_loan_payment" }, { amount: -8_253, categoryId: "cat_interest_fees" }],
+    }, now);
+    expect(updated.amount).toBe(tx.amount);
+    expect(updated.splits).toHaveLength(2);
+    // Clearing restores the unsplit state.
+    expect((await setTransactionSplitsFromInput(repo, SAMPLE_USER.id, { transactionId: tx.id, splits: [] }, now)).splits).toEqual([]);
+  });
+
+  it("rejects unbalanced, fractional, cross-user and over-posted input", async () => {
+    const { repo, tx } = await loanPayment();
+    const attempt = (input: unknown, userId = SAMPLE_USER.id) => setTransactionSplitsFromInput(repo, userId, input, now);
+    await expect(attempt({ transactionId: tx.id, splits: [{ amount: -30_000, categoryId: null }, { amount: -8_000, categoryId: null }] })).rejects.toThrow(ValidationError);
+    await expect(attempt({ transactionId: tx.id, splits: [{ amount: -30_647.5, categoryId: null }, { amount: -8_252.5, categoryId: null }] })).rejects.toThrow(ValidationError);
+    await expect(attempt({ transactionId: tx.id, splits: [{ amount: -38_900, categoryId: null }] })).rejects.toThrow(ValidationError);
+    await expect(attempt({ transactionId: tx.id, splits: [{ amount: -1, categoryId: "cat_nope" }, { amount: -38_899, categoryId: null }] })).rejects.toThrow(ValidationError);
+    await expect(attempt({ transactionId: tx.id, amount: 1, splits: [] })).rejects.toThrow(ValidationError);
+    repo.seedUser({ id: "intruder", displayName: "Intruder" });
+    await expect(attempt({ transactionId: tx.id, splits: [] }, "intruder")).rejects.toThrow(NotFoundError);
+    expect((await repo.getTransaction(SAMPLE_USER.id, tx.id))!.splits).toEqual([]);
   });
 });

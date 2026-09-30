@@ -9,8 +9,13 @@
  *   overflow or an accidental fractional value fails loudly instead of silently.
  * - Decimal strings are converted by string parsing, never by `parseFloat * 100`.
  * - Ratios (savings rate) are integer basis points computed with BigInt.
+ * - Scaling (interest = balance × rate) goes through multiplyByFraction(), which multiplies in
+ *   BigInt so the intermediate product can't lose precision, then rounds once.
  *
- * Postgres stores the same value in `bigint` columns (`*_minor`).
+ * Safe range: |value| <= Number.MAX_SAFE_INTEGER = 9,007,199,254,740,991 minor units
+ * (= $90,071,992,547,409.91). Postgres `*_minor bigint` columns carry CHECK constraints
+ * limiting them to the same range, and the database boundary converts values with
+ * src/db/money-codec.ts (bigint values are never trusted to fit in a JS number unchecked).
  */
 
 declare const moneyBrand: unique symbol;
@@ -42,6 +47,18 @@ export function money(minorUnits: number): Money {
 }
 
 export const ZERO = money(0);
+
+/** Largest representable amount, in minor units. */
+export const MAX_MONEY = money(Number.MAX_SAFE_INTEGER);
+export const MIN_MONEY = money(Number.MIN_SAFE_INTEGER);
+
+/** Converts a safe BigInt count of minor units to Money, rejecting anything out of range. */
+export function moneyFromBigInt(value: bigint, label = "amount"): Money {
+  if (value > BigInt(Number.MAX_SAFE_INTEGER) || value < BigInt(Number.MIN_SAFE_INTEGER)) {
+    throw new MoneyError(`${label} ${value} is outside the safe money range`);
+  }
+  return money(Number(value));
+}
 
 export function add(a: Money, b: Money): Money {
   return money(a + b);
@@ -84,10 +101,7 @@ export function parseMoney(input: string): Money {
   const [, sign, whole, fraction = ""] = match;
   const minor = BigInt(whole!) * 100n + BigInt(fraction.padEnd(2, "0"));
   const signed = sign ? -minor : minor;
-  if (signed > BigInt(Number.MAX_SAFE_INTEGER) || signed < BigInt(Number.MIN_SAFE_INTEGER)) {
-    throw new MoneyError(`Money value out of range: "${input}"`);
-  }
-  return money(Number(signed));
+  return moneyFromBigInt(signed, `Money string "${input}"`);
 }
 
 /** Convenience for tests and fixtures: dollars(12.34) === 1234. Only accepts whole cents. */
@@ -145,22 +159,45 @@ export function formatMoney(value: Money, options: FormatMoneyOptions = {}): str
   return formatter.format(toDecimalString(value) as unknown as number);
 }
 
+/** Integer division rounding half away from zero (BigInt; `denominator` must be non-zero). */
+function divideRoundHalfAwayFromZero(numerator: bigint, denominator: bigint): bigint {
+  const negative = numerator < 0n !== denominator < 0n;
+  const absN = numerator < 0n ? -numerator : numerator;
+  const absD = denominator < 0n ? -denominator : denominator;
+  const rounded = (absN * 2n + absD) / (absD * 2n);
+  return negative ? -rounded : rounded;
+}
+
+/**
+ * amount × numerator / denominator, rounded once (half away from zero) to whole minor units.
+ * Example: monthly interest at 5.90% APR = multiplyByFraction(balance, 590, 10_000 * 12).
+ * The product is formed in BigInt, so it can't overflow or lose precision even when
+ * amount × numerator exceeds 2^53; only the final result must be in the safe range.
+ * Numerator and denominator must be safe integers (express decimal rates as integer ratios).
+ */
+export function multiplyByFraction(amount: Money, numerator: number, denominator: number): Money {
+  if (!Number.isSafeInteger(numerator) || !Number.isSafeInteger(denominator) || denominator === 0) {
+    throw new MoneyError(`multiplyByFraction needs safe integer numerator/denominator (denominator != 0), got ${numerator}/${denominator}`);
+  }
+  assertMoney(amount);
+  return moneyFromBigInt(divideRoundHalfAwayFromZero(BigInt(amount) * BigInt(numerator), BigInt(denominator)), "product");
+}
+
 /** Basis points: 10_000 = 100%. */
 export type BasisPoints = number;
 
 /**
  * round(numerator / denominator * 10_000) using BigInt, half away from zero.
- * Returns null when the denominator is zero.
+ * Returns null when the denominator is zero. Throws if the ratio itself is too large to be a
+ * safe integer (e.g. $90T of savings on $0.01 of income) rather than returning a lossy number.
  */
 export function ratioInBasisPoints(numerator: Money, denominator: Money): BasisPoints | null {
   if (denominator === 0) return null;
-  const n = BigInt(numerator) * 10_000n;
-  const d = BigInt(denominator);
-  const negative = n < 0n !== d < 0n;
-  const absN = n < 0n ? -n : n;
-  const absD = d < 0n ? -d : d;
-  const rounded = (absN * 2n + absD) / (absD * 2n);
-  return Number(negative ? -rounded : rounded);
+  const bps = divideRoundHalfAwayFromZero(BigInt(numerator) * 10_000n, BigInt(denominator));
+  if (bps > BigInt(Number.MAX_SAFE_INTEGER) || bps < BigInt(Number.MIN_SAFE_INTEGER)) {
+    throw new MoneyError(`Ratio ${numerator}/${denominator} is too large to represent in basis points`);
+  }
+  return Number(bps);
 }
 
 export function formatBasisPoints(bps: BasisPoints | null, fractionDigits = 1): string {

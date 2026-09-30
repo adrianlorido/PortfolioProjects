@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAX_MONEY,
+  MIN_MONEY,
   MoneyError,
   add,
+  moneyFromBigInt,
+  multiplyByFraction,
+  negate,
+  subtract,
   dollars,
   formatBasisPoints,
   formatMoney,
@@ -85,5 +91,63 @@ describe("money: safe integer minor units (requirement G)", () => {
     expect(formatBasisPoints(-1234, 2)).toBe("-12.34%");
     expect(formatBasisPoints(3050, 0)).toBe("31%");
     expect(formatBasisPoints(null)).toBe("—");
+  });
+});
+
+describe("money: safe-integer boundaries (review area A)", () => {
+  const MAX = Number.MAX_SAFE_INTEGER; // 9,007,199,254,740,991 minor units = $90,071,992,547,409.91
+
+  it("the largest representable amount is $90,071,992,547,409.91", () => {
+    expect(MAX_MONEY).toBe(9_007_199_254_740_991);
+    expect(toDecimalString(MAX_MONEY)).toBe("90071992547409.91");
+    expect(toDecimalString(MIN_MONEY)).toBe("-90071992547409.91");
+    expect(parseMoney("90071992547409.91")).toBe(MAX);
+    expect(() => parseMoney("90071992547409.92")).toThrow(MoneyError);
+    expect(() => parseMoney("-90071992547409.92")).toThrow(MoneyError);
+  });
+
+  it("add/subtract/negate/sum throw instead of silently leaving the safe range", () => {
+    expect(() => add(MAX_MONEY, money(1))).toThrow(MoneyError);
+    expect(() => subtract(MIN_MONEY, money(1))).toThrow(MoneyError);
+    expect(() => add(MIN_MONEY, money(-1))).toThrow(MoneyError);
+    expect(() => sum([MAX_MONEY, money(1), money(-1)])).toThrow(MoneyError); // intermediate overflow is caught
+    expect(negate(MIN_MONEY)).toBe(MAX); // symmetric range: negation is always safe
+    expect(add(MAX_MONEY, money(-1))).toBe(MAX - 1);
+  });
+
+  it("exact decimal output near the limit (no division rounding)", () => {
+    expect(toDecimalString(money(9_007_199_254_740_899))).toBe("90071992547408.99");
+    expect(toDecimalString(money(-1))).toBe("-0.01");
+  });
+
+  it("multiplyByFraction multiplies in BigInt, so a product above 2^53 is still exact", () => {
+    // Found by randomized search: the float product 4356127882428965 × 757 exceeds 2^53 and
+    // rounds, so the naive formula is off by one cent. The BigInt path is exact.
+    const a = money(4_356_127_882_428_965);
+    expect(Math.round((a * 757) / 1739)).toBe(1_896_255_783_208_009); // float: wrong
+    expect(multiplyByFraction(a, 757, 1739)).toBe(1_896_255_783_208_008); // exact: floor(3297588806998726505/1739 + 0.5)
+    expect(BigInt(1_896_255_783_208_008) * 1739n <= 4_356_127_882_428_965n * 757n).toBe(true);
+    expect(multiplyByFraction(money(1_680_000), 590, 120_000)).toBe(8260); // 5.90% APR monthly on $16,800
+    expect(multiplyByFraction(money(5), 1, 2)).toBe(3); // half away from zero
+    expect(multiplyByFraction(money(-5), 1, 2)).toBe(-3);
+    expect(multiplyByFraction(money(-4), 1, 3)).toBe(-1);
+  });
+
+  it("multiplyByFraction rejects results outside the safe range and non-integer factors", () => {
+    expect(() => multiplyByFraction(MAX_MONEY, 2, 1)).toThrow(MoneyError);
+    expect(() => multiplyByFraction(money(100), 1.5, 1)).toThrow(MoneyError);
+    expect(() => multiplyByFraction(money(100), 1, 0)).toThrow(MoneyError);
+    expect(() => multiplyByFraction(10.5 as never, 1, 1)).toThrow(MoneyError);
+  });
+
+  it("ratioInBasisPoints refuses to return an unsafe number", () => {
+    expect(() => ratioInBasisPoints(MAX_MONEY, money(1))).toThrow(MoneyError);
+    expect(ratioInBasisPoints(MAX_MONEY, MAX_MONEY)).toBe(10_000);
+  });
+
+  it("moneyFromBigInt guards the BigInt -> number conversion", () => {
+    expect(moneyFromBigInt(9_007_199_254_740_991n)).toBe(MAX);
+    expect(() => moneyFromBigInt(9_007_199_254_740_992n)).toThrow(MoneyError);
+    expect(() => moneyFromBigInt(-9_007_199_254_740_992n)).toThrow(MoneyError);
   });
 });

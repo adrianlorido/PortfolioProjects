@@ -56,3 +56,20 @@ export const transactionUpdateSchema = z
   .strict();
 
 export type TransactionUpdateInput = z.infer<typeof transactionUpdateSchema>;
+
+/** Untrusted input for replacing a transaction's splits. Sum/ownership rules are enforced downstream. */
+export const transactionSplitsSchema = z
+  .object({
+    transactionId: idSchema,
+    splits: z
+      .array(
+        z
+          .object({
+            amount: z.number().refine(Number.isSafeInteger, "amount must be integer minor units"),
+            categoryId: idSchema.nullable(),
+          })
+          .strict(),
+      )
+      .max(20),
+  })
+  .strict();

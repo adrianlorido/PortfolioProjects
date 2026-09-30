@@ -9,7 +9,7 @@
  * (see ../provider.ts), so they flow through the same ingestion path a real provider would.
  */
 import type { AccountType, IsoDate } from "@/domain/models";
-import { type Money, add, money, negate } from "@/modules/finance/money";
+import { type Money, abs, add, money, multiplyByFraction, negate } from "@/modules/finance/money";
 import { type MonthKey, monthPeriod, monthRange } from "@/modules/finance/period";
 import type { NormalizedAccount, NormalizedBalance, NormalizedTransaction } from "../provider";
 
@@ -122,6 +122,8 @@ interface Draft {
   description: string;
   amount: Money;
   pending?: boolean;
+  /** Provider-neutral category hint (slug in our taxonomy), as a real adapter would map it. */
+  hint?: string;
 }
 
 export interface SampleDataset {
@@ -139,9 +141,9 @@ function lastDay(month: MonthKey): number {
   return Number(monthPeriod(month).end.slice(8));
 }
 
-/** Monthly interest in cents at an annual rate given in basis points (integer math). */
+/** One month of interest at an annual rate in basis points, computed exactly (BigInt) and rounded once. */
 function monthlyInterest(balance: Money, annualRateBps: number): Money {
-  return money(Math.round((Math.abs(balance) * annualRateBps) / 10_000 / 12));
+  return multiplyByFraction(abs(balance), annualRateBps, 10_000 * 12);
 }
 
 export function generateSampleDataset(): SampleDataset {
@@ -159,7 +161,7 @@ export function generateSampleDataset(): SampleDataset {
 
     // ---- Income -------------------------------------------------------------------------
     for (const d of [1, 15]) {
-      post({ account: "checking", date: day(month, d), merchant: "Acme Corp", description: "ACME CORP PAYROLL PPD ID: 9912345", amount: money(315_000) });
+      post({ account: "checking", date: day(month, d), merchant: "Acme Corp", description: "ACME CORP PAYROLL PPD ID: 9912345", amount: money(315_000), hint: "paycheck" });
     }
 
     // ---- Housing & bills from checking --------------------------------------------------
@@ -168,21 +170,21 @@ export function generateSampleDataset(): SampleDataset {
     post({ account: "checking", date: day(month, 12), merchant: "PG&E", description: "PGANDE WEB ONLINE PAYMENT", amount: negate(rng.cents(7_800, 14_500)) });
 
     // ---- Transfers between own accounts (both legs) -------------------------------------
-    post({ account: "checking", date: day(month, 3), merchant: "Transfer to Savings", description: "ONLINE TRANSFER TO SAVINGS XXXX4821", amount: money(-50_000) });
-    post({ account: "savings", date: day(month, 3), merchant: "Transfer from Checking", description: "ONLINE TRANSFER FROM CHECKING XXXX1934", amount: money(50_000) });
+    post({ account: "checking", date: day(month, 3), merchant: "Transfer to Savings", description: "ONLINE TRANSFER TO SAVINGS XXXX4821", amount: money(-50_000), hint: "transfer" });
+    post({ account: "savings", date: day(month, 3), merchant: "Transfer from Checking", description: "ONLINE TRANSFER FROM CHECKING XXXX1934", amount: money(50_000), hint: "transfer" });
 
-    post({ account: "checking", date: day(month, 5), merchant: "Harbor Brokerage", description: "HARBOR BROKERAGE ACH CONTRIB", amount: money(-40_000) });
-    post({ account: "brokerage", date: day(month, 5), merchant: "Contribution", description: "ACH CONTRIBUTION RECEIVED", amount: money(40_000) });
+    post({ account: "checking", date: day(month, 5), merchant: "Harbor Brokerage", description: "HARBOR BROKERAGE ACH CONTRIB", amount: money(-40_000), hint: "investment_contribution" });
+    post({ account: "brokerage", date: day(month, 5), merchant: "Contribution", description: "ACH CONTRIBUTION RECEIVED", amount: money(40_000), hint: "investment_contribution" });
 
     // ---- Auto loan: interest accrues on the 1st, payment on the 10th ---------------------
     const loanInterest = monthlyInterest(running.get("auto_loan")!, 590);
-    post({ account: "auto_loan", date: day(month, 1), merchant: "Northwind Auto Finance", description: "INTEREST CHARGE", amount: negate(loanInterest) });
-    post({ account: "checking", date: day(month, 10), merchant: "Northwind Auto Finance", description: "NORTHWIND AUTO FIN PMT", amount: money(-38_900) });
-    post({ account: "auto_loan", date: day(month, 10), merchant: "Payment Received", description: "AUTO LOAN PAYMENT RECEIVED", amount: money(38_900) });
+    post({ account: "auto_loan", date: day(month, 1), merchant: "Northwind Auto Finance", description: "INTEREST CHARGE", amount: negate(loanInterest), hint: "interest_fees" });
+    post({ account: "checking", date: day(month, 10), merchant: "Northwind Auto Finance", description: "NORTHWIND AUTO FIN PMT", amount: money(-38_900), hint: "loan_payment" });
+    post({ account: "auto_loan", date: day(month, 10), merchant: "Payment Received", description: "AUTO LOAN PAYMENT RECEIVED", amount: money(38_900), hint: "loan_payment" });
 
     // ---- Credit card: pay last month's charges in full on the 22nd -----------------------
-    post({ account: "checking", date: day(month, 22), merchant: "Summit Card Services", description: "SUMMIT CARD ONLINE PMT", amount: negate(previousMonthCardCharges) });
-    post({ account: "visa", date: day(month, 22), merchant: "Payment Received", description: "ONLINE PAYMENT - THANK YOU", amount: previousMonthCardCharges });
+    post({ account: "checking", date: day(month, 22), merchant: "Summit Card Services", description: "SUMMIT CARD ONLINE PMT", amount: negate(previousMonthCardCharges), hint: "credit_card_payment" });
+    post({ account: "visa", date: day(month, 22), merchant: "Payment Received", description: "ONLINE PAYMENT - THANK YOU", amount: previousMonthCardCharges, hint: "credit_card_payment" });
 
     // ---- Card spending -----------------------------------------------------------------
     const card = (d: number, m: Merchant, amount: Money) =>
@@ -229,7 +231,7 @@ export function generateSampleDataset(): SampleDataset {
         .slice(monthStartIndex)
         .filter((d) => d.account === "savings")
         .reduce((t, d) => add(t, d.amount), running.get("savings")!);
-      post({ account: "savings", date: day(month, dim), merchant: "Evergreen Bank", description: "INTEREST PAID", amount: monthlyInterest(savingsSoFar, 400) });
+      post({ account: "savings", date: day(month, dim), merchant: "Evergreen Bank", description: "INTEREST PAID", amount: monthlyInterest(savingsSoFar, 400), hint: "interest_income" });
     }
 
     // Drop anything dated after the as-of date (the current month is partial).
@@ -279,6 +281,7 @@ function assemble(drafts: Draft[]): SampleDataset {
       amount: d.amount,
       currency: "USD",
       pending: d.pending ?? false,
+      categoryHint: d.hint ?? null,
     };
   });
 
@@ -301,7 +304,7 @@ function assemble(drafts: Draft[]): SampleDataset {
         .reduce((s, t) => add(s, t.amount), money(0));
       // Market move between -1.5% and +2.5%, in basis points, applied with integer rounding.
       const moveBps = marketRng.int(-150, 250);
-      const move = money(Math.round((brokerageValue * moveBps) / 10_000));
+      const move = multiplyByFraction(brokerageValue, moveBps, 10_000);
       brokerageValue = add(add(brokerageValue, contributions), move);
     }
     brokerageSeries.set(date, brokerageValue);

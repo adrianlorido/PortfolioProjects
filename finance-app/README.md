@@ -19,7 +19,8 @@ on deterministic, fictional sample data — no bank connections, no API keys, no
   cannot be edited.
 - **Categories** — 12-group taxonomy with each category's reporting kind and rule counts.
 - **Deterministic finance engine** with documented rules — see
-  [docs/finance-rules.md](docs/finance-rules.md).
+  [docs/finance-rules.md](docs/finance-rules.md). The Phase 1 technical review and its fixes are
+  recorded in [docs/phase-1-review.md](docs/phase-1-review.md).
 
 ## Architecture
 
@@ -65,8 +66,9 @@ Phase 1 does **not** need a database to run. The schema is ready for Phase 2:
   PGDATABASE=postgres npm run db:verify
   ```
 
-  This applies the migration on top of a minimal Supabase-auth shim and runs constraint,
-  idempotency-key, immutability, RLS-isolation and column-privilege assertions.
+  This applies all migrations on top of a minimal Supabase-auth shim and runs every suite in
+  `supabase/tests/`: constraints, safe-integer money bounds, idempotency keys, immutability,
+  cross-user RLS isolation, column privileges, split balancing and credential access.
 
 ## Sample-data mode
 
@@ -105,8 +107,11 @@ npm run db:verify    # SQL schema assertions (needs local Postgres)
 - Edits are not durable (in-memory, per server process; not suitable for multi-instance/serverless).
 - USD only; mixed currencies are rejected rather than converted.
 - Balance history is month-end snapshots; investment values come from a synthetic series.
-- Category rules run only at first import; no rule editor, merchant cleanup, splits, or custom
-  categories yet.
+- Category rules and provider hints run only at first import; no rule editor, merchant cleanup
+  or custom categories yet. Transaction splits exist in the domain, engine, repository and schema
+  (e.g. loan principal vs interest) but have no editing UI yet.
+- Transfers are identified by category only (rules, provider hints, user edits); there is no
+  linked transfer pair or transfer-matching engine.
 - No automated end-to-end browser tests (verified manually with Playwright screenshots).
 
 ## Planned Phase 2 (not started)

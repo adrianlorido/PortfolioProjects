@@ -20,6 +20,8 @@ export interface TransactionRow {
   accountName: string;
   categoryId: string | null;
   categoryName: string | null;
+  /** > 0 when the transaction is split across categories (reports use the split lines). */
+  splitCount: number;
   amount: Money;
   pending: boolean;
   notes: string | null;
@@ -72,7 +74,13 @@ export function TransactionTable({ rows, categoryOptions }: { rows: TransactionR
                 </td>
                 <td className="whitespace-nowrap px-4 py-2.5 text-secondary">{row.accountName}</td>
                 <td className="whitespace-nowrap px-4 py-2.5">
-                  {row.categoryName ? row.categoryName : <span className="text-muted">Uncategorized</span>}
+                  {row.splitCount > 0 ? (
+                    <Badge variant="accent">Split · {row.splitCount} categories</Badge>
+                  ) : row.categoryName ? (
+                    row.categoryName
+                  ) : (
+                    <span className="text-muted">Uncategorized</span>
+                  )}
                 </td>
                 <td className="px-4 py-2.5 text-right font-medium">
                   <Amount value={row.amount} muted={row.excludedFromReports} />
@@ -131,6 +139,9 @@ function EditTransactionDialog({ row, categoryOptions, onClose }: { row: Transac
         <div className="mt-4 space-y-4">
           <div>
             <Label htmlFor="edit-category">Category</Label>
+            {row.splitCount > 0 ? (
+              <p className="mb-1.5 text-xs text-muted">This transaction is split; reports use its {row.splitCount} split lines, not this category.</p>
+            ) : null}
             <Select id="edit-category" name="categoryId" defaultValue={row.categoryId ?? ""}>
               <option value="">Uncategorized</option>
               {categoryOptions.map((g) => (

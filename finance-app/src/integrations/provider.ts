@@ -11,6 +11,10 @@
  * Core modules (finance, accounts, transactions, analytics) depend only on these types and
  * on the domain model, never on provider SDKs or provider field names.
  *
+ * Runtime validation: ingestion re-validates every record against
+ * src/modules/sync/normalized-schemas.ts before anything is written, so a buggy adapter can't
+ * persist NaN, fractional cents or impossible dates.
+ *
  * Credentials: methods receive a `ProviderConnectionRef`, never an access token. Adapters
  * resolve secrets server-side (e.g. from the service-role-only `connection_credentials`
  * table). Adapters must only be imported from server code.
@@ -58,6 +62,19 @@ export interface NormalizedTransaction {
   amount: Money;
   currency: CurrencyCode;
   pending: boolean;
+  /**
+   * Set on a POSTED transaction that replaces a pending one: the pending transaction's
+   * externalTransactionId. Ingestion then carries the user's edits over from the pending row
+   * and deletes it in the same step, so the pair never coexists (no double counting). Providers
+   * that don't link pending/posted leave it null and send the pending id in `removed`.
+   */
+  pendingExternalTransactionId?: string | null;
+  /**
+   * Optional category suggestion, as a slug of OUR taxonomy (e.g. "credit_card_payment").
+   * Adapters map their own taxonomy (e.g. Plaid personal_finance_category) to our slugs inside
+   * the adapter. Used at first import only when no user rule matches; unknown slugs are ignored.
+   */
+  categoryHint?: string | null;
 }
 
 export interface RemovedTransactionRef {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SAMPLE_USER, createSampleRepository } from "@/db/sample-bootstrap";
-import { calculateNetWorth, monthPeriod, subtract, sum } from "@/modules/finance";
+import { calculateNetWorth, monthPeriod, postedNetChangeByAccount, sum } from "@/modules/finance";
 import { createFinanceQueries } from "./finance-queries";
 
 async function queries() {
@@ -15,7 +15,11 @@ describe("finance queries over sample data", () => {
     const history = await q.getNetWorthHistory({ start: "2026-01-01", end: "2026-12-31" });
     expect(history.length).toBe(7);
     expect(history[history.length - 1]).toMatchObject({ date: "2026-09-28", netWorth: netWorth.netWorth });
-    expect(netWorth.netWorth).toBe(subtract(netWorth.assets, netWorth.liabilities));
+    // Independent formula: under the sign convention, net worth is simply the sum of all
+    // signed balances (no classification needed). Must agree with assets − liabilities.
+    const accounts = await q.getAccounts();
+    expect(netWorth.netWorth).toBe(sum(accounts.map((a) => a.currentBalance)));
+    expect(netWorth.liabilities).toBe(-sum(accounts.filter((a) => a.accountClass === "liability").map((a) => a.currentBalance)));
   });
 
   it("every sample transaction is categorized by rules", async () => {
@@ -48,7 +52,11 @@ describe("finance queries over sample data", () => {
     // September income is exactly two paychecks: the excluded reimbursement is not income.
     expect(sept.income).toBe(630_000);
     expect((await q.getSpendingByCategory(monthPeriod("2026-08"))).map((r) => r.categoryName)).not.toContain("Flights");
-    expect(aug.spending).toBeGreaterThan(0);
+    // Un-excluding the $318.40 work flight raises August spending by exactly $318.40.
+    const flight = excluded.find((t) => t.originalDescription.startsWith("DELTA"))!;
+    await repo.updateTransactionUserFields(SAMPLE_USER.id, flight.id, { excludedFromReports: false }, "2026-09-29T00:00:00.000Z");
+    const augIncluded = await q.getCashFlow(monthPeriod("2026-08"));
+    expect(augIncluded.spending - aug.spending).toBe(31_840);
   });
 
   it("pending sample transactions are ignored by default but can be included", async () => {
@@ -59,11 +67,22 @@ describe("finance queries over sample data", () => {
     expect(withPending.spending - posted.spending).toBe(8_712 + 1_895);
   });
 
-  it("the net-worth change over the sample equals the change in account balances", async () => {
-    const { repo, q } = await queries();
-    const history = await q.getNetWorthHistory({ start: "2026-03-31", end: "2026-09-28" });
-    const accounts = await repo.listAccounts(SAMPLE_USER.id);
-    expect(history[history.length - 1]!.netWorth).toBe(calculateNetWorth(accounts).netWorth);
+  it("ledger integrity: for every non-investment account, each snapshot-to-snapshot change equals the posted transactions in between", async () => {
+    const { repo } = await queries();
+    const accounts = (await repo.listAccounts(SAMPLE_USER.id)).filter((a) => a.type !== "investment");
+    const transactions = await repo.listTransactions(SAMPLE_USER.id);
+    for (const account of accounts) {
+      const snaps = await repo.listBalanceSnapshots(SAMPLE_USER.id, { accountId: account.id });
+      expect(snaps.length).toBeGreaterThan(2);
+      for (let i = 1; i < snaps.length; i++) {
+        const between = transactions.filter((t) => t.accountId === account.id && t.date > snaps[i - 1]!.date && t.date <= snaps[i]!.date);
+        const change = postedNetChangeByAccount(between).get(account.id) ?? 0;
+        expect(snaps[i]!.balance - snaps[i - 1]!.balance, `${account.name} ${snaps[i]!.date}`).toBe(change);
+      }
+    }
+    // And the latest history point is today's net worth.
+    const history = await createFinanceQueries(repo, SAMPLE_USER.id).getNetWorthHistory({ start: "2026-03-31", end: "2026-09-28" });
+    expect(history[history.length - 1]!.netWorth).toBe(calculateNetWorth(await repo.listAccounts(SAMPLE_USER.id)).netWorth);
   });
 
   it("returns results for one user only", async () => {

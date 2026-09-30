@@ -2,8 +2,7 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { Nav } from "@/components/layout/nav";
 import { SampleBanner } from "@/components/layout/sample-banner";
-import { SAMPLE_AS_OF_DATE } from "@/integrations/sample/dataset";
-import { isSampleMode } from "@/lib/env";
+import { getDataSourceInfo } from "@/db";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -12,11 +11,11 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
-  const sample = isSampleMode();
+  const dataSource = getDataSourceInfo();
   return (
     <html lang="en">
       <body className="min-h-screen">
-        {sample ? <SampleBanner asOf={SAMPLE_AS_OF_DATE} /> : null}
+        {dataSource.mode === "sample" ? <SampleBanner asOf={dataSource.asOf} /> : null}
         <div className="mx-auto flex max-w-[1400px]">
           <aside className="sticky top-0 hidden h-screen w-56 shrink-0 flex-col border-r border-border px-3 py-5 md:flex">
             <Brand />

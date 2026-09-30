@@ -7,6 +7,7 @@ import { connectInstitution, syncConnection } from "@/modules/sync/ingest";
 import { InMemoryFinanceRepository } from "./in-memory-repository";
 
 export const SAMPLE_USER: User = { id: "sample-user", displayName: "Alex Sample" };
+export { SAMPLE_AS_OF_DATE as SAMPLE_DATA_AS_OF } from "@/integrations/sample/dataset";
 
 /**
  * Builds a fully populated, deterministic in-memory repository for sample mode:

@@ -10,7 +10,7 @@ import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { displayBalance } from "@/modules/accounts/grouping";
 import { getFinanceQueriesForCurrentUser } from "@/modules/analytics/server";
 import { getDashboard } from "@/modules/dashboard/get-dashboard";
-import { type Money, formatBasisPoints, formatMoney, formatMonthLabel, monthPeriod, subtract, sum } from "@/modules/finance";
+import { type Money, formatBasisPoints, formatMoney, formatMonthLabel, monthPeriod } from "@/modules/finance";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -24,7 +24,8 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
   const monthLabel = d.month ? formatMonthLabel(d.month) : "—";
   const cf = d.cashFlow;
   const prev = d.previousCashFlow;
-  const otherTotal = sum(d.otherCategories.map((c) => c.amount));
+  const otherTotal = d.otherCategoriesTotal;
+  const change = d.cashFlowChange;
   const shortDate = (iso: string) => new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" }).format(new Date(`${iso}T00:00:00Z`));
   // A month-to-date figure compared against a full month must say so.
   const vsCaption = prev ? `vs ${formatMonthLabel(prev.month, "short").split(" ")[0]}${d.isPartialMonth ? " (full month)" : ""}` : "";
@@ -50,9 +51,9 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
           className="col-span-2 lg:col-span-1"
           delta={d.netWorthChange ? { amount: d.netWorthChange.amount, caption: `since ${shortDate(d.netWorthChange.since)}`, goodWhenUp: true } : undefined}
         />
-        <StatTile label="Income" value={cf ? formatMoney(cf.income) : "—"} delta={cf && prev ? { amount: subtract(cf.income, prev.income), caption: vsCaption, goodWhenUp: true } : undefined} />
-        <StatTile label="Spending" value={cf ? formatMoney(cf.spending) : "—"} delta={cf && prev ? { amount: subtract(cf.spending, prev.spending), caption: vsCaption, goodWhenUp: false } : undefined} />
-        <StatTile label="Savings" value={cf ? formatMoney(cf.savings) : "—"} delta={cf && prev ? { amount: subtract(cf.savings, prev.savings), caption: vsCaption, goodWhenUp: true } : undefined} />
+        <StatTile label="Income" value={cf ? formatMoney(cf.income) : "—"} delta={change ? { amount: change.income, caption: vsCaption, goodWhenUp: true } : undefined} />
+        <StatTile label="Spending" value={cf ? formatMoney(cf.spending) : "—"} delta={change ? { amount: change.spending, caption: vsCaption, goodWhenUp: false } : undefined} />
+        <StatTile label="Savings" value={cf ? formatMoney(cf.savings) : "—"} delta={change ? { amount: change.savings, caption: vsCaption, goodWhenUp: true } : undefined} />
         <StatTile label="Savings rate" value={cf ? formatBasisPoints(cf.savingsRate) : "—"} footnote="Savings ÷ income" />
       </section>
 

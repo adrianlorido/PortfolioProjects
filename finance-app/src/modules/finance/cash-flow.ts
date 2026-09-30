@@ -1,5 +1,6 @@
-import type { Category, CategoryKind, Id, Transaction } from "@/domain/models";
+import type { Category, CategoryKind, Id, Transaction, TransactionSplit } from "@/domain/models";
 import { assertSingleCurrency } from "./currency";
+import { validateSplits } from "./splits";
 import { type BasisPoints, type Money, ZERO, add, money, negate, ratioInBasisPoints, subtract } from "./money";
 import { type MonthKey, type ReportPeriod, assertValidPeriod, isDateInPeriod, monthPeriod } from "./period";
 
@@ -22,6 +23,9 @@ import { type MonthKey, type ReportPeriod, assertValidPeriod, isDateInPeriod, mo
  *    reversal, reduces income).
  * 8. Uncategorized transactions (categoryId = null) are treated as expense-kind, so an
  *    unrecognised outflow still shows up as spending rather than vanishing.
+ * 9. Split transactions are reported line by line: each split line is classified by its own
+ *    category (so a loan payment can be $420 transfer + $80 expense). Exclusion and pending
+ *    status apply to the whole transaction. Lines must sum exactly to the amount.
  */
 
 export interface ReportOptions {
@@ -32,7 +36,7 @@ export interface ReportOptions {
 export type ReportableTransaction = Pick<
   Transaction,
   "date" | "amount" | "currency" | "pending" | "excludedFromReports" | "categoryId"
->;
+> & { splits?: readonly TransactionSplit[] };
 export type ReportCategory = Pick<Category, "id" | "kind">;
 
 export type ReportClassification =
@@ -70,20 +74,40 @@ export function classifyForReports(
   return { counted: true, kind };
 }
 
-function countedInPeriod<T extends ReportableTransaction>(
-  transactions: readonly T[],
+/** A counted piece of a transaction: the whole transaction, or one split line. */
+export interface ReportLine {
+  amount: Money;
+  categoryId: Id | null;
+  kind: "income" | "expense";
+}
+
+/**
+ * The lines of a transaction that count toward reports (empty when it doesn't count).
+ * Unsplit: one line with the transaction's amount and category. Split: one line per split.
+ */
+export function reportLinesFor(tx: ReportableTransaction, categories: CategoryLookup, options: ReportOptions = {}): ReportLine[] {
+  const splits = tx.splits ?? [];
+  validateSplits(tx.amount, splits);
+  const lines = splits.length > 0 ? splits : [{ amount: tx.amount, categoryId: tx.categoryId }];
+  const counted: ReportLine[] = [];
+  for (const line of lines) {
+    const c = classifyForReports({ ...tx, amount: line.amount, categoryId: line.categoryId }, categories, options);
+    if (c.counted) counted.push({ amount: line.amount, categoryId: line.categoryId, kind: c.kind });
+  }
+  return counted;
+}
+
+function countedInPeriod(
+  transactions: readonly ReportableTransaction[],
   categories: CategoryLookup,
   period: ReportPeriod,
   kind: "income" | "expense",
   options: ReportOptions,
-): T[] {
+): ReportLine[] {
   assertValidPeriod(period);
   const inPeriod = transactions.filter((tx) => isDateInPeriod(tx.date, period));
   assertSingleCurrency(inPeriod);
-  return inPeriod.filter((tx) => {
-    const c = classifyForReports(tx, categories, options);
-    return c.counted && c.kind === kind;
-  });
+  return inPeriod.flatMap((tx) => reportLinesFor(tx, categories, options)).filter((line) => line.kind === kind);
 }
 
 /** Total income in the period, as a (normally positive) amount. */
@@ -94,7 +118,7 @@ export function calculateIncome(
   options: ReportOptions = {},
 ): Money {
   const lookup = buildCategoryLookup(categories);
-  return countedInPeriod(transactions, lookup, period, "income", options).reduce((t, tx) => add(t, tx.amount), ZERO);
+  return countedInPeriod(transactions, lookup, period, "income", options).reduce((t, line) => add(t, line.amount), ZERO);
 }
 
 /** Net spending in the period, as a positive amount (outflows minus refunds). */
@@ -106,7 +130,7 @@ export function calculateSpending(
 ): Money {
   const lookup = buildCategoryLookup(categories);
   const net = countedInPeriod(transactions, lookup, period, "expense", options).reduce(
-    (t, tx) => add(t, tx.amount),
+    (t, line) => add(t, line.amount),
     ZERO,
   );
   // Expense outflows are negative under the sign convention; spending is reported as positive.
@@ -200,6 +224,7 @@ export interface CategorySpending {
   categoryId: Id | null;
   /** Net spending (positive). Can be negative if refunds exceed purchases in the period. */
   amount: Money;
+  /** Counted lines: an unsplit transaction is one line; a split contributes one per line. */
   transactionCount: number;
 }
 
@@ -215,9 +240,9 @@ export function calculateSpendingByCategory(
 ): CategorySpending[] {
   const lookup = buildCategoryLookup(categories);
   const buckets = new Map<Id | null, { net: Money; count: number }>();
-  for (const tx of countedInPeriod(transactions, lookup, period, "expense", options)) {
-    const bucket = buckets.get(tx.categoryId) ?? { net: ZERO, count: 0 };
-    buckets.set(tx.categoryId, { net: add(bucket.net, tx.amount), count: bucket.count + 1 });
+  for (const line of countedInPeriod(transactions, lookup, period, "expense", options)) {
+    const bucket = buckets.get(line.categoryId) ?? { net: ZERO, count: 0 };
+    buckets.set(line.categoryId, { net: add(bucket.net, line.amount), count: bucket.count + 1 });
   }
   return [...buckets.entries()]
     .map(([categoryId, { net, count }]) => ({ categoryId, amount: negate(net), transactionCount: count }))

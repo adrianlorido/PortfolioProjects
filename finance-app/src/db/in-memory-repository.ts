@@ -8,10 +8,12 @@ import type {
   Id,
   Provider,
   Transaction,
+  TransactionSplit,
   TransactionUserEdits,
   User,
 } from "@/domain/models";
 import { NotFoundError, ValidationError } from "@/lib/errors";
+import { SplitError, validateSplits } from "@/modules/finance/splits";
 import {
   type TransactionFilters,
   compareTransactionsNewestFirst,
@@ -93,12 +95,14 @@ export class InMemoryFinanceRepository implements FinanceRepository {
 
   async listTransactions(userId: Id, filters: TransactionFilters = {}) {
     return ownedBy(this.transactions, userId)
+      .map(cloneTransaction)
       .filter((tx) => matchesTransactionFilters(tx, filters))
       .sort(compareTransactionsNewestFirst);
   }
 
   async getTransaction(userId: Id, transactionId: Id) {
-    return ownedOne(this.transactions, userId, transactionId);
+    const tx = ownedOne(this.transactions, userId, transactionId);
+    return tx ? cloneTransaction(tx) : null;
   }
 
   async listBalanceSnapshots(userId: Id, query: SnapshotQuery = {}) {
@@ -130,7 +134,30 @@ export class InMemoryFinanceRepository implements FinanceRepository {
     if (edits.notes !== undefined) updated.notes = edits.notes;
     if (edits.excludedFromReports !== undefined) updated.excludedFromReports = edits.excludedFromReports;
     this.transactions.set(transactionId, updated);
-    return { ...updated };
+    return cloneTransaction(updated);
+  }
+
+  async setTransactionSplits(userId: Id, transactionId: Id, splits: TransactionSplit[], now: string) {
+    const existing = this.transactions.get(transactionId);
+    if (!existing || existing.userId !== userId) throw new NotFoundError("Transaction");
+    this.assertValidSplits(userId, existing.amount, splits);
+    const updated: Transaction = { ...existing, splits: splits.map((s) => ({ ...s })), updatedAt: now };
+    this.transactions.set(transactionId, updated);
+    return cloneTransaction(updated);
+  }
+
+  private assertValidSplits(userId: Id, amount: Transaction["amount"], splits: readonly TransactionSplit[]) {
+    try {
+      validateSplits(amount, splits);
+    } catch (error) {
+      if (error instanceof SplitError) throw new ValidationError(error.message);
+      throw error;
+    }
+    for (const split of splits) {
+      if (split.categoryId === null) continue;
+      const category = this.categories.get(split.categoryId);
+      if (!category || category.userId !== userId) throw new ValidationError("Split references unknown category");
+    }
   }
 
   // ---- Ingestion ----------------------------------------------------------------------------
@@ -184,7 +211,7 @@ export class InMemoryFinanceRepository implements FinanceRepository {
     const found = [...this.transactions.values()].find(
       (t) => t.userId === userId && t.accountId === accountId && t.externalTransactionId === externalTransactionId,
     );
-    return found ? { ...found } : null;
+    return found ? cloneTransaction(found) : null;
   }
 
   async saveTransaction(transaction: Transaction) {
@@ -194,6 +221,7 @@ export class InMemoryFinanceRepository implements FinanceRepository {
       const category = this.categories.get(transaction.categoryId);
       if (!category || category.userId !== transaction.userId) throw new ValidationError("Transaction references unknown category");
     }
+    this.assertValidSplits(transaction.userId, transaction.amount, transaction.splits);
     const existing = this.transactions.get(transaction.id);
     if (existing && (existing.externalTransactionId !== transaction.externalTransactionId || existing.accountId !== transaction.accountId)) {
       // Mirrors the database trigger: provider identity is immutable.
@@ -207,7 +235,7 @@ export class InMemoryFinanceRepository implements FinanceRepository {
         t.externalTransactionId === transaction.externalTransactionId,
     );
     if (clash) throw new ValidationError("Duplicate (account, external_transaction_id)");
-    this.transactions.set(transaction.id, { ...transaction });
+    this.transactions.set(transaction.id, cloneTransaction(transaction));
   }
 
   async deleteTransaction(userId: Id, transactionId: Id) {
@@ -226,6 +254,11 @@ export class InMemoryFinanceRepository implements FinanceRepository {
   private assertUser(userId: Id) {
     if (!this.users.has(userId)) throw new ValidationError("Unknown user");
   }
+}
+
+/** Transactions hold a nested array; copy it too so callers can't mutate stored splits. */
+function cloneTransaction(tx: Transaction): Transaction {
+  return { ...tx, splits: tx.splits.map((s) => ({ ...s })) };
 }
 
 function ownedBy<T extends { userId: Id }>(map: Map<string, T>, userId: Id): T[] {
